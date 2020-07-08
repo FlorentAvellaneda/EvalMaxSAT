@@ -1,0 +1,2 @@
+/usr/bin/ar qc libMaLib.a  CMakeFiles/MaLib.dir/src/main.cpp.o
+/usr/bin/ranlib libMaLib.a
