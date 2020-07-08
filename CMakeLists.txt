@@ -52,16 +52,5 @@ else()
 
 endif()
 
-
-
 install (TARGETS ${projectName} DESTINATION bin)
-
-
-FOREACH (localLib ${localLibs})
-	install(DIRECTORY lib/${localLib}
-		DESTINATION include
-		FILES_MATCHING PATTERN "*.h")
-ENDFOREACH(localLib)
-
-
 
