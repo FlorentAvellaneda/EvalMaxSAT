@@ -85,12 +85,12 @@ int main(int argc, char *argv[]) {
     int b = solver->newVar();
     int c = solver->newVar();
 
-    // Add hard clause
+    // Add hard clauses
     solver->addClause({-a, -b});                // !a or !b
     auto card = solver->newCard({a, b, c});
     solver->addClause( {*card <= 2} );          // a + b + c <= 2
 
-    // Add soft clause
+    // Add soft clauses
     solver->addWeightedClause({a, b}, 1);       // a or b
     solver->addWeightedClause({c}, 1);          // c
     solver->addWeightedClause({a, -c}, 1);      // a or !c
