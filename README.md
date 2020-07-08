@@ -113,7 +113,7 @@ int main(int argc, char *argv[]) {
 You can reuse and adapt the CMakeLists.txt file to compile.
 
 ## Benchmark
-EvalMaxSAT was ranked second in the [MaxSAT Evaluation 2020](https://maxsat-evaluations.github.io/2020/).
+The single thread version of EvalMaxSAT was ranked second in the [MaxSAT Evaluation 2020](https://maxsat-evaluations.github.io/2020/).
 
 ![img](http://florent.avellaneda.free.fr/maxsat2020.jpg)
 
