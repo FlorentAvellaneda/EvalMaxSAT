@@ -523,6 +523,12 @@ public:
         unsigned int nbSecondSolveMin = 20;
         unsigned int timeOutForSecondSolve = 60;
         // END CONFIG
+        
+        // Reinit CL
+        CL_ConflictToMinimize.clear();
+        CL_LitToUnrelax.clear();
+        CL_LitToRelax.clear();
+        CL_CardToAdd.clear();
 
         MonPrint("\t\t\tMain Thread: extractAM...");
         extractAM();
