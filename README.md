@@ -2,7 +2,7 @@
 
 # EvalMaxSAT
 
-Paper link: [A Short Description of the Solver EvalMaxSAT](https://florent.avellaneda.free.fr/EvalMaxSAT.pdf)
+Paper link: [A Short Description of the Solver EvalMaxSAT](http://florent.avellaneda.free.fr/dl/EvalMaxSAT.pdf)
 
 ## Introduction
 
