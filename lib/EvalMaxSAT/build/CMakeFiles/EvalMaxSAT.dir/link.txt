@@ -1,2 +1,0 @@
-/usr/bin/ar qc libEvalMaxSAT.a  CMakeFiles/EvalMaxSAT.dir/src/card_oe.cpp.o CMakeFiles/EvalMaxSAT.dir/src/cardincremental.cpp.o CMakeFiles/EvalMaxSAT.dir/src/lazyvariable.cpp.o CMakeFiles/EvalMaxSAT.dir/src/main.cpp.o CMakeFiles/EvalMaxSAT.dir/src/virtualcard.cpp.o CMakeFiles/EvalMaxSAT.dir/src/virtualsat.cpp.o
-/usr/bin/ranlib libEvalMaxSAT.a
