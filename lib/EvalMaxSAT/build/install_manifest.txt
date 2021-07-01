@@ -1,3 +1,0 @@
-/usr/local/lib/libEvalMaxSAT.a
-/usr/local/lib/libMaLib.a
-/usr/local/lib/libglucose.a
