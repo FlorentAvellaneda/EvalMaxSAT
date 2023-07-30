@@ -18,88 +18,10 @@
 #include <string>
 #include <mutex>
 
-
 #include "Chrono.h"
-
 
 namespace MaLib
 {
-
-
-
-
-template <class T>
-std::tuple<T, int> max(const std::vector<T> &vect) {
-    if(vect.size()==0) {
-        T tmp;
-        return std::make_tuple(tmp, -1);
-    }
-    T vMax = vect[0];
-    int id=0;
-
-    for(int i=1; i<vect.size(); i++) {
-        if(vMax < vect[i]) {
-            vMax = vect[i];
-            id = i;
-        }
-    }
-
-    return std::make_tuple(vMax, id);
-}
-
-template <class T>
-std::tuple<T, int> min(const std::vector<T> &vect) {
-    if(vect.size()==0) {
-        T tmp;
-        return std::make_tuple(tmp, -1);
-    }
-    T vMin = vect[0];
-    int id=0;
-
-    for(int i=1; i<vect.size(); i++) {
-        if(vMin > vect[i]) {
-            vMin = vect[i];
-            id = i;
-        }
-    }
-
-    return std::make_tuple(vMin, id);
-}
-
-class LogCall {
-public:
-    static void call(int decalage) {
-        static unsigned int nb = 0;
-
-        if(decalage != 0) {
-            nb+=decalage;
-        } else {
-            for(unsigned int i=0; i<nb; i++)
-                std::cout << "  ";
-        }
-    }
-
-    LogCall(std::string msg) {
-        LogCall::call(0);
-        std::cout << msg << std::endl;
-        LogCall::call(1);
-    }
-
-    ~LogCall() {
-        //std::cout << "-1" << std::endl;
-        LogCall::call(-1);
-    }
-};
-
-
-
-#define LOG MaLib::LogCall::call(0); std::cout
-#define LOG_CALL(txt) MaLib::LogCall LOG_15768312_INT(txt);
-
-#define NOT_LOG_CALL(txt)
-#define NOT_LOG if(false) std::cout
-
-
 
 // Afficher le continue d'un vector
 template <class T>
@@ -236,7 +158,6 @@ namespace  {
     }
 }
 
-
 template<typename ...T>
 std::string toString(const T&... args) {
     std::ostringstream oss;
@@ -244,43 +165,20 @@ std::string toString(const T&... args) {
     return oss.str();
 }
 
-
-namespace
-{
-    //see: https://stackoverflow.com/a/16387374/4181011
-    template<typename T, size_t... Is>
-    void add_rhs_to_lhs(T& t1, const T& t2, std::integer_sequence<size_t, Is...>)
-    {
-        auto l = { (std::get<Is>(t1) += std::get<Is>(t2), 0)... };
-        (void)l; // prevent unused warning
-    }
-}
-
-template <typename...T>
-std::tuple<T...>& operator += (std::tuple<T...>& lhs, const std::tuple<T...>& rhs)
-{
-    add_rhs_to_lhs(lhs, rhs, std::index_sequence_for<T...>{});
-    return lhs;
-}
-
-template <typename...T>
-std::tuple<T...> operator + (std::tuple<T...> lhs, const std::tuple<T...>& rhs)
-{
-   return lhs += rhs;
-}
-
 namespace {
-//MaLib::Chrono MonPrint_Chrono;
+#ifdef NDEBUG
+    //MaLib::Chrono MonPrint_Chrono;
+#else
+    MaLib::Chrono MonPrint_Chrono;
+#endif
 }
 template<typename ...T>
 void MonPrint(const T&... args) {
-/*
-    static std::mutex forPrint;
-    {
-        std::lock_guard lock(forPrint);
-        std::cout << MonPrint_Chrono.tacSec() << ": " << toString(args...) << std::endl;
-    }
-*/
+#ifdef NDEBUG
+    //std::cout << "c " << MonPrint_Chrono.tacSec() << ": " << toString(args...) << std::endl;
+#else
+    std::cout << "c " << (int)(MonPrint_Chrono.tacSec()) << ": " << toString(args...) << std::endl;
+#endif
 }
 
 

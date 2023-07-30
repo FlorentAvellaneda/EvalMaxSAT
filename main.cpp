@@ -2,80 +2,203 @@
 #include <cassert>
 #include <csignal>
 #include <zlib.h>
+#include <chrono>
+
+#include <unistd.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <memory>
 
 #include "EvalMaxSAT.h"
 #include "lib/CLI11.hpp"
 
-
 using namespace MaLib;
 
-EvalMaxSAT* monMaxSat = nullptr;
+Chrono TotalChrono("c Total time");
+
+std::string exec(std::string cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
+}
+
+std::string cur_file;
+std::unique_ptr<EvalMaxSAT<Solver_cadical>> monMaxSat;
+bool oldOutputFormat = false;
+unsigned int bench = 0;
 
 void signalHandler( int signum ) {
-    std::cout << "c Interrupt signal (" << signum << ") received." << std::endl;
-    std::cout << "c o >=" << monMaxSat->getCost() << std::endl;
-    std::cout << "s UNKNOWN" << std::endl;
 
-   delete monMaxSat;
+    if(monMaxSat != nullptr) {
+        if(bench) {
+                std::cout << cur_file << "\t" << calculateCost(cur_file, monMaxSat->solution) << "\t" << TotalChrono.tacSec() << std::endl;
+        } else
+        if(oldOutputFormat) {
+            std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+            std::cout << "s OPTIMUM FOUND" << std::endl;
+            std::cout << "v";
+            for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
+                if(monMaxSat->solution[i]) {
+                    std::cout << " " << i;
+                } else {
+                    std::cout << " -" << i;
+                }
+            }
+            std::cout << std::endl;
+        } else {
+            std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+            std::cout << "s UNKNOWN" << std::endl;
+            //std::cout << "o " << calculateCost(file, solution) << std::endl;
+            std::cout << "v ";
+            for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
+                std::cout << monMaxSat->solution[i];
+            }
+            std::cout << std::endl;
+        }
+    }
 
-   exit(signum);
+    //std::cout << "c Interrupt signal (" << signum << ") received, curFile = "<<cur_file<< std::endl;
+    exit(signum);
 }
+
+
+template<class SOLVER>
+std::tuple<std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::string file, double targetComputationTime=3600) {
+    cur_file = file;
+
+    if(!parse(file, monMaxSat)) {
+        std::cerr << "Unable to read the file " << file << std::endl;
+        assert(false);
+        return std::make_tuple<std::vector<bool>, t_weight>({},-1);
+    }
+
+    monMaxSat->setTargetComputationTime( targetComputationTime - TotalChrono.tacSec() );
+    if(monMaxSat->isWeighted() == false) {
+        monMaxSat->disableOptimize();
+    }
+    if(!monMaxSat->solve()) {
+        std::cout << "s UNSATISFIABLE" << std::endl;
+        return std::make_tuple<std::vector<bool>, t_weight>({},-1);
+    }
+
+    assert(monMaxSat->solutionCost == calculateCost(file, monMaxSat->solution));
+
+    return {monMaxSat->solution, calculateCost(file, monMaxSat->solution)};
+}
+
 
 int main(int argc, char *argv[])
 {
-    Chrono chrono("c Total time");
+    assert([](){std::cout << "c Assertion activated. For better performance, compile the project with assertions disabled. (-DNDEBUG)" << std::endl; return true;}());
+
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
-    /////// PARSE ARG //////////////////////
-    CLI::App app{"EvalMaxSAT Solver"};
+    ///////////////////////////
+    /// PARSE ARG
+    ///
+        CLI::App app{"EvalMaxSAT Solver"};
 
-    std::string file;
-    app.add_option("file", file, "File with the formula to be solved (wcnf format)")->check(CLI::ExistingFile)->required();
+        std::string file;
+        app.add_option("file", file, "File with the formula to be solved (wcnf format)")->check(CLI::ExistingFile)->required();
 
-    unsigned int paralleleThread=0;
-    app.add_option("-p", paralleleThread, toString("Number of minimization threads (default = ",paralleleThread,")"));
+        unsigned int minimalRefTime=1;
+        app.add_option("--minRefTime", minimalRefTime, toString("Minimal reference time to improve unsat core (default = ",minimalRefTime,")"));
 
-    unsigned int timeOutFastMinimize=60;
-    app.add_option("--timeout_fast", timeOutFastMinimize, toString("Timeout in second for fast minimize (default = ",timeOutFastMinimize,")"));
+        unsigned int maximalRefTime=5*60;
+        app.add_option("--maxRefTime", maximalRefTime, toString("Maximal reference time to improve unsat core (default = ",maximalRefTime,")"));
 
-    unsigned int coefMinimizeTime=2;
-    app.add_option("--coef_minimize", coefMinimizeTime, toString("Multiplying coefficient of the time spent to minimize cores (default = ",coefMinimizeTime,")"));
+        unsigned int targetComputationTime = 60*60;
+        app.add_option("--TCT", targetComputationTime, toString("Target Computation Time (default = ",targetComputationTime,")"));
 
-    CLI11_PARSE(app, argc, argv);
+        double coefOnRefTime = 1.66;
+        app.add_option("--coefAVG", coefOnRefTime, toString("Average coef on ref time (default = ",coefOnRefTime,")"));
+
+        double initialCoef = 10;
+        app.add_option("--coefInit", initialCoef, toString("Initial coef on ref time (default = ",initialCoef,")"));
+
+        app.add_flag("--old", oldOutputFormat, "Use old output format");
+
+        app.add_option("--bench", bench, "Bench mode");
+
+        bool noDS=false;
+        app.add_flag("--noDS", noDS, "Unactivate Delay Strategy");
+
+        bool noMS=false;
+        app.add_flag("--noMS", noMS, "Unactivate Multisolve Strategy");
+
+        bool noUBS=false;
+        app.add_flag("--noUBS", noUBS, "Unactivate UB Strategy");
+
+
+        CLI11_PARSE(app, argc, argv);
+    ///
     ////////////////////////////////////////
 
+    monMaxSat = std::make_unique<EvalMaxSAT<Solver_cadical>>();
+    monMaxSat->setCoef(initialCoef, coefOnRefTime);
+    monMaxSat->setBoundRefTime(minimalRefTime, maximalRefTime);
 
-    auto monMaxSat = new EvalMaxSAT(paralleleThread);
-    monMaxSat->setTimeOutFast(timeOutFastMinimize);
-    monMaxSat->setCoefMinimize(coefMinimizeTime);
-
-    auto in = gzopen(file.c_str(), "rb");
-    if(!monMaxSat->parse(in)) {
-        return -1;
+    if(noDS) {
+        monMaxSat->unactivateDelayStrategy();
+    }
+    if(noMS) {
+        monMaxSat->unactivateMultiSolveStrategy();
+    }
+    if(noUBS) {
+        monMaxSat->unactivateUBStrategy();
     }
 
-    if(!monMaxSat->solve()) {
-        std::cout << "s UNSATISFIABLE" << std::endl;
-        return 0;
+    auto [solution, cost] = solveFile(monMaxSat.get(), file, targetComputationTime);
+
+    if(bench) {
+        std::cout << file << "\t" << calculateCost(file, solution) << "\t" << TotalChrono.tacSec() << std::endl;
+    } else {
+        if(oldOutputFormat) {
+            ////// PRINT SOLUTION OLD FORMAT //////////////////
+            ///
+                std::cout << "o " << calculateCost(file, solution) << std::endl;
+                std::cout << "s OPTIMUM FOUND" << std::endl;
+                std::cout << "v";
+                for(unsigned int i=1; i<solution.size(); i++) {
+                    if(solution[i]) {
+                        std::cout << " " << i;
+                    } else {
+                        std::cout << " -" << i;
+                    }
+                }
+                std::cout << std::endl;
+            ///
+            ///////////////////////////////////////
+        } else {
+            ////// PRINT SOLUTION NEW FORMAT //////////////////
+            ///
+                std::cout << "o " << calculateCost(file, solution) << std::endl;
+                std::cout << "s OPTIMUM FOUND" << std::endl;
+                std::cout << "v ";
+                for(unsigned int i=1; i<solution.size(); i++) {
+                    std::cout << solution[i];
+                }
+                std::cout << std::endl;
+            ///
+            ///////////////////////////////////////
+        }
     }
 
-    ////// PRINT SOLUTION //////////////////
-    std::cout << "s OPTIMUM FOUND" << std::endl;
-    std::cout << "o " << monMaxSat->getCost() << std::endl;
-    std::cout << "v";
-    for(unsigned int i=1; i<=monMaxSat->nInputVars; i++) {
-        if(monMaxSat->getValue(i))
-            std::cout << " " << i;
-        else
-            std::cout << " -" << i;
-    }
-    std::cout << std::endl;
-    ///////////////////////////////////////
+    assert(calculateCost(file, solution) == cost);
 
-    delete monMaxSat;
     return 0;
 }
+
+
 
 
 

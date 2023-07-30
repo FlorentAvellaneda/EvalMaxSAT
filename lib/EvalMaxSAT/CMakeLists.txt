@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
-
+cmake_minimum_required(VERSION 2.8)
 
 get_filename_component(projectName ${CMAKE_CURRENT_SOURCE_DIR} NAME)
 
@@ -13,18 +12,19 @@ file(
 
 set(localLibs
 	MaLib
-        glucose
+        cadical
 )
-
 
 set(externLibs
-        pthread
-)
 
+)
 
 
 add_definitions(-DNDEBUG)
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3")
+#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3")
+#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O0 -g")
+#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -g")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -static -lrt -pthread -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
 
 
 if(TARGET ${projectName})

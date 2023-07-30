@@ -1,972 +1,1217 @@
-﻿#ifndef EVALMAXSAT_SLK178903R_H
+#ifndef EVALMAXSAT_SLK178903R_H
 #define EVALMAXSAT_SLK178903R_H
+
 
 #include <iostream>
 #include <vector>
 #include <algorithm>
 #include <random>
+#include <queue>
 
-#include "communicationlist.h"
+
+#include "utile.h"
 #include "Chrono.h"
 #include "coutUtil.h"
-#include "virtualmaxsat.h"
-#include "virtualsat.h"
-#include "monglucose41.h"
+#include "cadicalinterface.h"
+#include "cardincremental.h"
+#include "rand.h"
 #include "mcqd.h"
-#include "coutUtil.h"
+
 
 using namespace MaLib;
 
 
-class EvalMaxSAT : public VirtualMAXSAT {
-    unsigned int nbMinimizeThread;
 
-    VirtualSAT *solver = nullptr;
-    std::vector<VirtualSAT*> solverForMinimize;
+class LocalOptimizer2 {
+    Solver_cadical *solver;
+    WeightVector poids;
+    t_weight initialWeight;
 
+public:
+    LocalOptimizer2(Solver_cadical *solver, const WeightVector &poids, const t_weight &initialWeight) :
+        solver(solver), poids(poids), initialWeight(initialWeight) {
 
-    std::vector<unsigned int> _weight;
-    std::vector<bool> model;
-    std::vector<int> mapAssum2card;
-    std::vector< std::tuple<std::shared_ptr<VirtualCard>, int> > save_card; // { {1, -2, 4}, 1 } <==> a v !b v d <= 1
+    }
 
-    MaLib::Chrono chronoLastSolve;
+    t_weight calculateCostAssign(const std::vector<bool> & solution) {
+        t_weight coutSolution = 0;
+        for(unsigned int lit=1; lit<poids.size(); lit++) {
+            assert( lit < solution.size() );
+            if( poids[lit] > 0 ) {
+                if( solution[lit] == 0 ) {
+                    coutSolution += poids[lit];
+                }
+            } else if ( poids[lit] < 0 ) {
+                if( solution[lit] == 1 ) {
+                    coutSolution += -poids[lit];
+                }
+            }
+        }
 
-    std::atomic<int> cost = 0;
-    unsigned int _timeOutFastMinimize=60;
-    unsigned int _coefMinimizeTime = 2.0;
+        return coutSolution + initialWeight;
+    }
 
-    ///// For communication between threads
-    MaLib::CommunicationList< std::tuple<std::list<int>, long> > CL_ConflictToMinimize; // {conflict, time_used_by_the_solver}
-    MaLib::CommunicationList< int > CL_LitToUnrelax;
-    MaLib::CommunicationList< int > CL_LitToRelax;
-    MaLib::CommunicationList< std::tuple<std::vector<int>, bool> > CL_CardToAdd;
-    std::atomic<unsigned int> numberMinimizeThreadRunning = 4;
-    /////
+    t_weight optimize(std::vector<bool> & solution, double timeout_sec)  {
+        auto timeout = MaLib::TimeOut(timeout_sec);
+        MonPrint("c optimize for ", timeout_sec, " sec");
 
+        std::vector< std::tuple<t_weight, int> > softVarFalsified;
+        std::vector< int > assumSatisfied;
+        for(unsigned int lit=1; lit<poids.size(); lit++) {
+            assert( lit < solution.size() );
+            if( poids[lit] > 0 ) {
+                assert(lit < solution.size() );
+                if( solution[lit] == 0 ) {
+                    softVarFalsified.push_back( {poids[lit], lit} );
+                } else {
+                    assumSatisfied.push_back(lit);
+                }
+            } else if( poids[lit] < 0 ) {
+                assert(lit < solution.size() );
+                if( solution[lit] == 1 ) {
+                    softVarFalsified.push_back( {poids[-lit], -lit} );
+                } else {
+                    assumSatisfied.push_back(-lit);
+                }
+            }
+        }
 
+        bool modify = false;
+        for(int id=softVarFalsified.size()-1; id >= 0; id--) {
+            assumSatisfied.push_back( std::get<1>(softVarFalsified[id]) );
+            if( solver->solveLimited(assumSatisfied, timeout_sec / (double)(softVarFalsified.size()+1) ) != 1 ) {
+                assumSatisfied.pop_back();
+            } else {
+                modify = true;
+            }
+        }
 
-    struct CompLit {
-      bool operator() (const int& a, const int& b) const {
-          if(abs(a) < abs(b))
-              return true;
+        if(modify) {
+            auto tmp = solver->solve(assumSatisfied);
+            assert(tmp == 1);
+            solution = solver->getSolution();
+        }
 
-          if(abs(a) == abs(b))
-              return (a>0) && (b<0);
+        return calculateCostAssign(solution);
+    }
 
-          return false;
-      }
-    };
+};
 
+template<class SAT_SOLVER=Solver_cadical>
+class EvalMaxSAT {
 
+    ///////////////////////////
+    /// Representation of the MaxSAT formula
+    ///
+        SAT_SOLVER *solver = nullptr;
+        WeightVector _poids; // _poids[lit] = weight of lit
+        std::map<t_weight, std::set<int>> _mapWeight2Assum; // _mapWeight2Assum[weight] = set of literals with this weight
+        t_weight cost = 0;
+
+        struct LitCard {
+            std::shared_ptr<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>> > card;
+            int atMost;
+            t_weight initialWeight;
+
+            LitCard(std::shared_ptr<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>>> card, int atMost, t_weight initialWeight) : card(card), atMost(atMost), initialWeight(initialWeight) {
+                assert( card != nullptr );
+                assert(atMost > 0);
+                assert(initialWeight > 0);
+            }
+
+            int getLit() const {
+                return card->atMost(atMost);
+            }
+        };
+        std::vector< std::optional<LitCard> > _mapAssum2Card; // _mapAssum2Card[lit] = card associated to lit
+
+        std::deque< std::tuple< std::vector<int>, t_weight> > _cardToAdd;   // cardinality to add
+        std::vector<int> _litToRelax; // Lit to relax
+    ///
+    //////////////////////////
+
+public:
+    ///////////////////////////
+    /// Best solution found so far
+    ///
+        std::vector<bool> solution;
+        t_weight solutionCost = std::numeric_limits<t_weight>::max();
+    ///
+    //////////////////////////
+private:
+    ///////////////////////////
+    /// Hyperparameters
+    ///
+        double _initialCoef = 10;
+        double _averageCoef = 1.66;
+        double _base = 400;
+        double _minimalRefTime = 5;
+        double _maximalRefTime = 5*60;
+        TimeOut totalSolveTimeout = TimeOut(0.9 * 3600 );
+
+        bool _delayStrategy = true;
+        bool _multiSolveStrategy = true;
+        bool _UBStrategy = true;
+    ///
     //////////////////////////////
-    ////// For extractAM ////////
-    ////////////////////////////
-    void extractAM() {
+
+    double getTimeRefCoef() {
+        if(totalSolveTimeout.getCoefPast() >= 1)
+            return 0;
+        return _initialCoef * pow(_base, -totalSolveTimeout.getCoefPast());
+    }
+
+public:
+
+
+
+    ///////////////////////////
+    /// Setter
+    ///
+        void setCoef(double initialCoef, double coefOnRefTime) {
+            auto W = [](double x){
+                // Approximation de la fonction W de Lambert par la série de Taylor
+                double result = x;
+                x *= x;
+                result += -x;
+                x *= x;
+                result += 3*x/2.0;
+                x *= x;
+                result += -8*x/3.0;
+                x *= x;
+                result += 125*x/24.0;
+                return result;
+            };
+
+            _initialCoef = initialCoef;
+            _averageCoef = coefOnRefTime;
+            _base = (-initialCoef / ( coefOnRefTime * W( (-initialCoef * std::exp(-initialCoef/coefOnRefTime)) / coefOnRefTime ) ));
+        }
+        void setTargetComputationTime(double targetComputationTime) {
+            totalSolveTimeout = TimeOut( targetComputationTime * 0.9 );
+        }
+        void setBoundRefTime(double minimalRefTime, double maximalRefTime) {
+            _minimalRefTime = minimalRefTime;
+            _maximalRefTime = maximalRefTime;
+        }
+        void unactivateDelayStrategy() {
+            _delayStrategy = false;
+        }
+        void unactivateMultiSolveStrategy() {
+            _multiSolveStrategy = false;
+        }
+        void unactivateUBStrategy() {
+            _UBStrategy = false;
+        }
+    ///
+    ////////////////////////
+
+
+    public:
+    EvalMaxSAT() : solver(new SAT_SOLVER) {
+        _poids.push_back(0);          // Fake lit with id=0
+        _mapAssum2Card.push_back({});  // Fake lit with id=0
+    }
+
+    ~EvalMaxSAT() {
+        delete solver;
+    }
+public:
+    void printInfo() {
+        std::cout << "c PARAMETRE INFORMATION: " << std::endl;
+        std::cout << "c Stop unsat improving after " << totalSolveTimeout.getVal() << " sec" << std::endl;
+        std::cout << "c Minimal ref time = " << _minimalRefTime << " sec" << std::endl;
+        std::cout << "c Initial coef = " << _initialCoef << std::endl;
+        std::cout << "c Average coef = " << _averageCoef << std::endl;
+    }
+
+
+    bool isWeighted() {
+        return _mapWeight2Assum.size() > 1;
+    }
+
+    int newVar(bool decisionVar=true) {
+        _poids.push_back(0);
+        _mapAssum2Card.push_back({});
+
+        int var = solver->newVar(decisionVar);
+
+        assert(var == _poids.size()-1);
+
+        return var;
+    }
+
+    int newSoftVar(bool value, long long weight) {
+        if(weight < 0) {
+            value = !value;
+            weight = -weight;
+        }
+
+        _poids.push_back(weight * (((int)value)*2 - 1));
+        _mapAssum2Card.push_back({});
+        _mapWeight2Assum[weight].insert( (((int)value*2) - 1) * ((int)(_poids.size())-1) );
+
+        int var = solver->newVar();
+        assert(var == _poids.size()-1);
+
+        return var;
+    }
+
+    int addClause(const std::vector<int> &clause, std::optional<long long> w = {}) {
+        if( w.has_value() == false ) { // Hard clause
+
+            if( (clause.size() == 1) && ( _poids[clause[0]] != 0 ) ) {
+                if( _poids[clause[0]] < 0 ) {
+                    assert( _mapWeight2Assum[ _poids[-clause[0]] ].count( -clause[0] ) );
+                    _mapWeight2Assum[ _poids[-clause[0]] ].erase( -clause[0] );
+                    cost += _poids[-clause[0]];
+                    relax(clause[0]);
+                } else {
+                    assert( _mapWeight2Assum[ _poids[clause[0]] ].count( clause[0] ) );
+                    _mapWeight2Assum[ _poids[clause[0]] ].erase( clause[0] );
+                }
+                _poids.set(clause[0], 0);
+                //relax(clause[0]);
+            }
+
+            solver->addClause(clause);
+        } else {
+            if(clause.size() > 1) { // Soft clause, i.e, "hard" clause with a soft var at the end
+                auto softVar = newSoftVar(true, w.value());
+                std::vector<int> softClause = clause;
+                softClause.push_back( -softVar );
+                addClause(softClause);
+                assert(softVar > 0);
+                return softVar;
+            } else { // Special case: unit clause.
+                addWeight(clause[0], w.value());
+            }
+        }
+        return 0;
+    }
+
+    t_weight getCost() {
+        return solutionCost;
+    }
+
+    bool getValue(int lit) {
+        if(abs(lit) > solution.size())
+            return false;
+        if(lit>0)
+            return solution[lit];
+        if(lit<0)
+            return !solution[-lit];
+        assert(false);
+        return 0;
+    }
+
+
+private:
+
+    std::set<int> initAssum(t_weight minWeightToConsider=1) {
+        std::set<int> assum;
+
+        for(auto itOnMapWeight2Assum = _mapWeight2Assum.rbegin(); itOnMapWeight2Assum != _mapWeight2Assum.rend(); ++itOnMapWeight2Assum) {
+            if(itOnMapWeight2Assum->first < minWeightToConsider)
+                break;
+            for(auto lit: itOnMapWeight2Assum->second) {
+                assum.insert(lit);
+            }
+        }
+        return assum;
+    }
+
+    bool toOptimize = true;
+public:
+    void disableOptimize() {
+        toOptimize = false;
+    }
+
+    bool solve() {
+        // TODO: Support incremental solve
+
+        totalSolveTimeout.restart();
+
+        MonPrint("c initial cost = ", cost);
+        std::set<int> assum;
+        std::set<int> lastSatAssum;
+
+        Chrono chronoLastSolve;
+        Chrono chronoLastOptimize;
+
         adapt_am1_exact();
         adapt_am1_FastHeuristicV7();
-    }
 
-    void reduceCliqueV2(std::list<int> & clique) {
-        for(auto posImpliquant = clique.begin() ; posImpliquant != clique.end() ; ++posImpliquant) {
-            auto posImpliquant2 = posImpliquant;
-            for(++posImpliquant2 ; posImpliquant2 != clique.end() ; ) {
-                if(solver->solveLimited(std::vector<int>({-(*posImpliquant), -(*posImpliquant2)}), 10000) != -1) {
-                    posImpliquant2 = clique.erase(posImpliquant2);
-                } else {
-                    ++posImpliquant2;
-                }
-            }
-        }
-    }
-
-    bool adapt_am1_FastHeuristicV7() {
-        MonPrint("adapt_am1_FastHeuristic");
-        Chrono chrono;
-        std::vector<int> prop;
-        unsigned int nbCliqueFound=0;
-
-        for(unsigned int VAR = 1; VAR<_weight.size(); VAR++) {
-            if(_weight[VAR] == 0)
-                continue;
-
-            assert(_weight[VAR] > 0);
-            int LIT = model[VAR]?static_cast<int>(VAR):-static_cast<int>(VAR);
-            prop.clear();
-            if(solver->propagate({LIT}, prop)) {
-                if(prop.size() == 0)
-                    continue;
-                assert(*prop.begin() == LIT);
-                if(prop.size() == 1)
-                    continue;
-
-                std::list<int> clique;
-                for(auto litProp: prop) {
-                    unsigned int var = static_cast<unsigned int>(abs(litProp));
-                    if(isInAssum(-litProp)) {
-                        clique.push_back(litProp);
-                        assert(solver->solve(std::vector<int>({-litProp, LIT})) == false);
-                    }
-                }
-
-                if(clique.size() == 0)
-                    continue;
-
-                reduceCliqueV2(clique); // retirer des elements pour que clique soit une clique
-
-                clique.push_back(-LIT);
-
-                if(clique.size() >= 2) {
-                    nbCliqueFound++;
-
-                    std::vector<int> clause;
-                    for(auto lit: clique)
-                        clause.push_back(-lit);
-
-                    processAMk(clause, 1);
-                }
-            } else {
-                addClause({-LIT});
-            }
-        }
-
-        MonPrint(nbCliqueFound, " cliques found in ", chrono.tac() / 1000, "ms.");
-        return true;
-    }
-
-    bool adapt_am1_exact() {
-        Chrono chrono;
-        unsigned int nbCliqueFound=0;
-        std::vector<int> assumption;
-
-        for(unsigned int i=1; i<_weight.size(); i++) {
-            if(_weight[i] > 0) {
-                if(model[i]) {
-                    assumption.push_back(static_cast<int>(i));
-                } else {
-                    assumption.push_back(-static_cast<int>(i));
-                }
-            }
-        }
-
-        MonPrint("Nombre d'assumption: ", assumption.size());
-
-        if(assumption.size() > 30000) { // hyper paramétre
-            MonPrint("skip");
-            return false;
-        }
-
-        MonPrint("Create graph for searching clique...");
-        unsigned int size = assumption.size();
-        bool **conn = new bool*[size];
-        for(unsigned int i=0; i<size; i++) {
-            conn[i] = new bool[size];
-            for(unsigned int x=0; x<size; x++)
-                conn[i][x] = false;
-        }
-
-        MonPrint("Create link in graph...");
-        for(unsigned int i=0; i<size; ) {
-            int lit1 = assumption[i];
-
-            std::vector<int> prop;
-            if(solver->propagate({lit1}, prop)) {
-                for(int lit2: prop) {
-                    for(unsigned int j=0; j<size; j++) {
-                        if(j==i)
-                            continue;
-                        if(assumption[j] == -lit2) {
-                            conn[i][j] = true;
-                            conn[j][i] = true;
-                        }
-                    }
-                }
-                i++;
-            } else {
-                addClause({-lit1});
-
-                assumption[i] = assumption.back();
-                assumption.pop_back();
-
-                for(unsigned int x=0; x<size; x++) {
-                    conn[i][x] = false;
-                    conn[x][i] = false;
-                }
-
-                size--;
-            }
-        }
-
-
-        if(size == 0) {
-            for(unsigned int i=0; i<size; i++) {
-                delete conn[i];
-            }
-            delete [] conn;
+        if(cost >= solutionCost) {
             return true;
         }
 
-        std::vector<bool> active(size, true);
-        for(;;) {
-            int *qmax;
-            int qsize=0;
-            Maxclique md(conn, size, 0.025);
-            md.mcqdyn(qmax, qsize, 100000);
-
-            if(qsize <= 2) { // Hyperparametre: Taille minimal a laquelle arreter la methode exact
-                for(unsigned int i=0; i<size; i++) {
-                    delete conn[i];
+        if(harden(assum)) {
+            assert(_mapWeight2Assum.size());
+            if(adapt_am1_VeryFastHeuristic()) {
+                if(cost >= solutionCost) {
+                    return true;
                 }
-                delete [] conn;
-                delete qmax;
+            }
+        }
 
-                MonPrint(nbCliqueFound, " cliques found in ", (chrono.tac() / 1000), "ms.");
+        ///////////////////
+        /// For harden via optimize
+        ///
+            assert(_cardToAdd.size() == 0);
+            assert(_litToRelax.size() == 0);
+            assert( [&](){
+                for(auto e: _mapAssum2Card) {
+                    if(e.has_value())
+                        return false;
+                }
+                return true;
+            }() );
+
+            LocalOptimizer2 LO(solver, _poids, cost);
+        //
+        /////////////////
+
+
+
+        // Initialize assumptions
+        auto minWeightToConsider = chooseNextMinWeight( _mapWeight2Assum.rbegin()->first + 1 );
+        assum = initAssum(minWeightToConsider);
+
+        std::cout << "o " << solutionCost << std::endl;
+
+        int resultLastSolve;
+        for(;;) {
+            MonPrint("Full SAT...");
+            assert( _cardToAdd.size() == 0 );
+            assert( _litToRelax.size() == 0 );
+
+            if(cost >= solutionCost) {
                 return true;
             }
-            nbCliqueFound++;
 
+            chronoLastSolve.tic();
             {
-                int newI=qmax[0];
-                std::vector<int> clause;
 
-                for (unsigned int i = 0; i < qsize; i++) {
-                    int lit = assumption[qmax[i]];
-                    active[qmax[i]] = false;
-                    clause.push_back(lit);
+                 assert( assum == initAssum(minWeightToConsider) );
 
-                    for(unsigned int x=0; x<size; x++) {
-                        conn[qmax[i]][x] = false;
-                        conn[x][qmax[i]] = false;
-                    }
+                //Chrono2 log("solve ");
+                resultLastSolve = solver->solve(assum);
+                MonPrint("resultLastSolve = ", resultLastSolve);
+                if(resultLastSolve == 1) {
+                    lastSatAssum = assum;
                 }
-                auto newAssum = processAMk(clause, 1);
-                assert(qsize >= newAssum.size());
+            }
+            chronoLastSolve.pause(true);
+            if(resultLastSolve) { // SAT
+                if(minWeightToConsider == 1) {
+                    solutionCost = cost;
+                    solution = solver->getSolution();
+                    return true; // Solution found
+                }
 
-                for(unsigned int j=0; j<newAssum.size() ; j++) {
-                    assumption[ qmax[j] ] = newAssum[j];
-                    active[ qmax[j] ] = true;
+                minWeightToConsider = chooseNextMinWeight(minWeightToConsider);
+                assum = initAssum(minWeightToConsider);
 
-                    std::vector<int> prop;
-                    if(solver->propagate({newAssum[j]}, prop)) {
-                        for(int lit2: prop) {
-                            for(unsigned int j=0; j<size; j++) {
-                                if(active[j]) {
-                                    if(assumption[j] == -lit2) {
-                                        conn[newI][j] = true;
-                                        conn[j][newI] = true;
+            } else { // UNSAT
+                for(;;) {
+                    if(resultLastSolve == 0) { // UNSAT
+                        double maxLastSolveOr1 = std::min<double>(_minimalRefTime + chronoLastSolve.tacSec(), _maximalRefTime);
+
+                        auto conflict = solver->getConflict(assum);
+                        MonPrint("conflict size = ", conflict.size(), " trouvé en ", chronoLastSolve.tacSec(), "sec, donc maxLastSolveOr1 = ", maxLastSolveOr1);
+
+                        if(conflict.size() == 0) {
+                            MonPrint("Fin par coupure !");
+                            assert(solver->solve() == 0);
+                            return solutionCost != std::numeric_limits<t_weight>::max();
+                        }
+
+                        // 1. find better core : seconds solve
+                        unsigned int nbSolve=0;
+                        unsigned int lastImprove = 0;
+                        double bestP = std::numeric_limits<double>::max();
+                        if(_multiSolveStrategy && (conflict.size() > 3)) {
+                            Chrono C;
+                            while( ( nbSolve < 3*lastImprove ) || (nbSolve < 20) || ( (C.tacSec() < 0.1*maxLastSolveOr1*getTimeRefCoef()) && (nbSolve < 1000) ) ) {
+                                nbSolve++;
+
+                                auto tmp = solver->getConflict(assum);
+                                auto p = oneMinimize(tmp, maxLastSolveOr1 * getTimeRefCoef() * 0.1, 10, true);
+
+                                if(p<bestP) {
+                                    bestP = p;
+                                    conflict = tmp;
+                                    MonPrint("Improve conflict at the ", nbSolve, "th solve = ", conflict.size(),  " (p = ", p , ")");
+                                    if(conflict.size() <= 2) {
+                                        break;
                                     }
+                                    lastImprove = nbSolve;
+                                }
+
+                                if(C.tacSec() >= maxLastSolveOr1*getTimeRefCoef() ) {
+                                    MonPrint("Stop second solve after ", nbSolve, "th itteration. (nb=",conflict.size(),"). (", C.tacSec(), " > ", maxLastSolveOr1, " * ", getTimeRefCoef(), ")");
+                                    break;
+                                }
+
+                                std::vector<int> vAssum(assum.begin(), assum.end());
+                                MaLib::MonRand::shuffle(vAssum);
+                                auto res = solver->solveWithTimeout(vAssum, maxLastSolveOr1 * getTimeRefCoef() - C.tacSec()  );
+                                if(res==-1) {
+                                    MonPrint("Stop second solve because solveWithTimeout. (nb=",conflict.size(),").");
+                                    break;
+                                }
+                            }
+                            MonPrint("Stop second solve after ", nbSolve, " itteration in ", C.tacSec(), " sec. (nb=",conflict.size(),").");
+                        }
+
+                        // 2. minimize core
+                        if(conflict.size() > 1) {
+                            oneMinimize(conflict, maxLastSolveOr1, 1000);
+                        }
+
+                        if(conflict.size() == 0) {
+                            return solutionCost != std::numeric_limits<t_weight>::max();
+                        }
+
+                        // 3. replace assum by card
+                        long long minWeight = std::numeric_limits<long long>::max();
+                        for(auto lit: conflict) {
+                            assert(_poids[lit] > 0);
+                            if( _poids[lit] < minWeight ) {
+                                minWeight = _poids[lit];
+                            }
+                        }
+                        assert(minWeight>0);
+                        for(auto lit: conflict) {
+                            _mapWeight2Assum[_poids[lit]].erase( lit );
+                            _poids.add(lit, -minWeight);
+                            if(_poids[lit] == 0) {
+                                if(_mapAssum2Card[ abs(lit) ].has_value()) {
+                                    _litToRelax.push_back(lit);
+                                }
+                            } else {
+                                _mapWeight2Assum[_poids[lit]].insert( lit );
+                            }
+                            assert(_poids[lit] >= 0);
+
+                            if(_poids[lit] < minWeightToConsider) {
+                                assum.erase(lit);
+                            }
+                        }
+
+                        for(auto& l: conflict) {
+                            l *= -1;
+                        }
+                        _cardToAdd.push_back( {conflict, minWeight} );
+                        MonPrint("cost = ", cost, " + ", minWeight);
+                        cost += minWeight;
+                        if(cost == solutionCost) {
+                            MonPrint("c UB == LB");
+                            return true;
+                        }
+                        MonPrint(_mapWeight2Assum.rbegin()->first, " >= ", solutionCost, " - ", cost, " (", solutionCost - cost, ") ?");
+                        if( _mapWeight2Assum.rbegin()->first >= solutionCost - cost) {
+                            MonPrint("c Déchanchement de Haden !");
+                            if(harden(assum)) {
+                                assert(_mapWeight2Assum.size());
+                                if(adapt_am1_VeryFastHeuristic()) {
+                                    assum = initAssum(minWeightToConsider);
                                 }
                             }
                         }
-                    } else {
-                        assert(!"Possible?");
-                        addClause({-newAssum[j]});
+                    } else if(resultLastSolve == 1) { // SAT
+                        if(_litToRelax.size()) {
+                            for(auto lit: _litToRelax) {
+                                auto newLit = relax(lit);
+                                if(newLit.has_value()) {
+                                    if( _poids[newLit.value()] >= minWeightToConsider ) {
+                                        assum.insert(newLit.value());
+                                    }
+                                }
+                            }
+                            _litToRelax.clear();
+                            assert( assum == initAssum(minWeightToConsider) );
+                        } else {
+                            ///////////////////
+                            /// For harden via optimize
+                            ///
+                                if(_UBStrategy && toOptimize) {
+                                    auto curSolution = solver->getSolution();
+                                    auto curCost = LO.optimize( curSolution, std::min(0.1 * chronoLastOptimize.tacSec(), 60.0) );
+
+                                    if(curCost < solutionCost) {
+                                        std::cout << "o " << curCost << std::endl;
+                                        solutionCost = curCost;
+                                        solution = curSolution;
+
+                                        if(harden(assum)) {
+                                            assert(_mapWeight2Assum.size());
+
+                                            if(adapt_am1_VeryFastHeuristic()) {
+                                                assum = initAssum(minWeightToConsider);
+                                            }
+                                        }
+                                    }
+                                    chronoLastOptimize.tic();
+                                }
+                            ///
+                            ////////////////
+
+                            while(_cardToAdd.size()) {
+                                std::shared_ptr<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>>> card = std::make_shared<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>>>(this, std::get<0>(_cardToAdd.front()), 1);
+                                int newAssumForCard = card->atMost(1);
+                                if(newAssumForCard != 0) {
+                                    assert( _poids[newAssumForCard] == 0 );
+
+                                    _poids.set(newAssumForCard, std::get<1>(_cardToAdd.front()));
+                                    _mapWeight2Assum[ std::get<1>(_cardToAdd.front()) ].insert(newAssumForCard);
+                                    _mapAssum2Card[ abs(newAssumForCard) ] = LitCard(card, 1, std::get<1>(_cardToAdd.front()));
+
+                                    if( _poids[newAssumForCard] >= minWeightToConsider ) {
+                                        assum.insert(newAssumForCard);
+                                    }
+                                }
+                                _cardToAdd.pop_front();
+                            }
+
+                            break;
+                        }
+                    } else { // TIMEOUT
+                        minWeightToConsider=1;
+                        assum = initAssum(minWeightToConsider);
+                        break;
+                    }
+
+                    if(_delayStrategy == false) {
+                        break;
+                    }
+
+                    MonPrint("Limited SAT...");
+
+                    chronoLastSolve.tic();
+                    {
+                        if(_mapWeight2Assum.size() <= 1) {
+                            resultLastSolve = solver->solveWithTimeout(assum, 60);
+                        } else {
+                            resultLastSolve = solver->solve(assum);
+                        }
+                        //resultLastSolve = solver->solveLimited(assum, 10000);
+                        //resultLastSolve = solver->solve(assum);
+                        //resultLastSolve = solver->solveWithTimeout(assum, 60);
+
+                        MonPrint("resultLastSolve = ", resultLastSolve);
+
+                        if(resultLastSolve == 1) {
+                            lastSatAssum = assum;
+                        }
+                    }
+                    chronoLastSolve.pause(true);
+                }
+
+                for(auto lit: _litToRelax) {
+                    auto newLit = relax(lit);
+                    if(newLit.has_value()) {
+                        if( _poids[newLit.value()] >= minWeightToConsider ) {
+                            assum.insert(newLit.value());
+                        }
                     }
                 }
-            }
+                _litToRelax.clear();
 
-            delete qmax;
+                for(auto c: _cardToAdd) {
+                    std::shared_ptr<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>>> card = std::make_shared<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>>>(this, std::get<0>(c), 1);
+                    int newAssumForCard = card->atMost(1);
+                    if(newAssumForCard != 0) {
+                        assert( _poids[newAssumForCard] == 0 );
+
+                        _poids.set(newAssumForCard, std::get<1>(c));
+                        _mapWeight2Assum[ std::get<1>(c) ].insert(newAssumForCard);
+                        _mapAssum2Card[ abs(newAssumForCard) ] = LitCard(card, 1, std::get<1>(c));
+
+                        if( _poids[newAssumForCard] >= minWeightToConsider ) {
+                            assum.insert(newAssumForCard);
+                        }
+                    }
+                }
+                _cardToAdd.clear();
+            }
         }
 
         assert(false);
-    }
-
-    template<class T>
-    std::vector<int> processAMk(const T &clause, unsigned int am) {
-        std::vector<int> newAssum;
-
-        assert(am < clause.size());
-        assert(am > 0);
-
-        unsigned int k = clause.size()-am;
-
-        int newAssumForCard = 0;
-
-        assert(clause.size() > 1);
-
-        std::vector<int> L;
-        for(auto lit: clause) {
-            assert(lit!=0);
-            unsigned int var = static_cast<unsigned int>(abs(lit));
-
-            L.push_back(-lit);
-            _weight[var] = 0;
-
-            if(mapAssum2card[var] != -1) {
-                int tmp = mapAssum2card[var];
-                assert(tmp >= 0);
-
-                std::get<1>(save_card[tmp])++;
-                int forCard = (*std::get<0>(save_card[tmp]) <= std::get<1>(save_card[tmp]));
-
-                if(forCard != 0) {
-                    newAssum.push_back(forCard);
-                    _weight[abs(forCard)] = 1;
-                    mapAssum2card[ abs(forCard) ] = tmp;
-                }
-            }
-        }
-
-        assert(L.size()>1);
-        assert(k < L.size());
-
-        cost += k;
-        MonPrint("cost = ", cost);
-
-        if(L.size() == 2) { // Optional, just to no add useless card to save_card
-            newAssum.push_back( addWeightedClause( {-L[0], -L[1]}, 1 ) );
-            return newAssum;
-        }
-
-        save_card.push_back( {newCard(L, k), k} );
-        newAssumForCard = (*std::get<0>(save_card.back()) <= std::get<1>(save_card.back()));
-
-        if(newAssumForCard != 0) {
-            newAssum.push_back(newAssumForCard);
-            _weight[abs(newAssumForCard)] = 1;
-            mapAssum2card[abs(newAssumForCard)] = save_card.size()-1;
-        }
-
-        return newAssum;
-    }
-    ///////////////////////////
-
-
-
-
-public:
-    EvalMaxSAT(unsigned int nbMinimizeThread=4, VirtualSAT *solver =
-            //new MonMiniSAT()
-            new MonGlucose41()
-            //new MonMaple()
-            //new MonCaDiCaL()
-            //new MonMiniCard()
-    ) : nbMinimizeThread(nbMinimizeThread), solver(solver)
-    {
-        for(unsigned int i=0; i<nbMinimizeThread; i++) {
-            solverForMinimize.push_back(new MonGlucose41());
-        }
-
-        _weight.push_back(0);           //
-        model.push_back(false);         // Fake lit with id=0
-        mapAssum2card.push_back(-1);    //
-    }
-
-    virtual ~EvalMaxSAT();
-
-    virtual void addClause(const std::vector<int> &vclause) {
-        if(vclause.size() == 1) {
-            unsigned int var1 = abs(vclause[0]);
-            if( _weight[var1] > 0 ) {
-                if(model[var1] == (vclause[0] < 0)) {
-                    cost += _weight[var1];
-                    MonPrint("cost = ", cost);
-                }
-                _weight[var1] = 0;
-            }
-        }
-
-        solver->addClause(vclause);
-        for(auto s: solverForMinimize) {
-            s->addClause(vclause);
-        }
-    }
-
-    virtual void simplify() {
-        assert(!"TODO");
-    }
-
-    virtual bool solve(const std::vector<int> &assumption) {
-        assert(!"TODO");
-    }
-
-    virtual int solveLimited(const std::vector<int> &assumption, int confBudget) {
-        assert(!"TODO");
-    }
-
-    virtual std::vector<int> getConflict() {
-        assert(!"TODO");
-    }
-
-    virtual void setDecisionVar(unsigned int var, bool b) {
-        solver->setDecisionVar(var, b);
-    }
-
-    bool isInAssum(int lit) {
-        unsigned int var = static_cast<unsigned int>(abs(lit));
-        if( _weight[var] > 0 ) {
-            if( model[var] == (lit>0) )
-                return true;
-        }
-        return false;
+        return true;
     }
 
 
     private:
 
-
-    void minimize(VirtualSAT* S, std::list<int> & conflict, long refTime, bool doFastMinimize) {
-        std::vector<int> uselessLit;
-        std::vector<int> L;
-        bool completed=false;
-        bool doExhaust=true;
-        if(!doFastMinimize) {
-            std::set<int> conflictMin(conflict.begin(), conflict.end());
-            completed = fullMinimize(S, conflictMin, uselessLit, _coefMinimizeTime*refTime);
-            if(completed) {
-                doExhaust=false;
-            }
-            for(auto lit: conflictMin) {
-                L.push_back(-lit);
-            }
-        } else {
-            MonPrint("minimize: skip car plus de 100000 ");
-            //completed = fastMinimize(S, conflict);
-
-            if(completed) {
-                doExhaust=false;
-            }
-
-            for(auto lit: conflict) {
-                L.push_back(-lit);
+    int harden(std::set<int> &assum) {
+        if(_mapWeight2Assum.size() == 0)
+            return 0;
+        if(_mapWeight2Assum.size()==1) {
+            if(_mapWeight2Assum.begin()->first == 1) {
+                return 0;
             }
         }
 
-        CL_LitToUnrelax.pushAll(uselessLit);
+        int nbHarden = 0;
+        t_weight maxCostLit = solutionCost - cost;
 
-        if(L.size() > 1) {
-            CL_CardToAdd.push({L, !completed});
-        }
 
-        for(auto lit: L) {
-            CL_LitToRelax.push(-lit);
-        }
+        while( _mapWeight2Assum.rbegin()->first >= maxCostLit ) {
+            assert(_mapWeight2Assum.size());
 
-        MonPrint("size conflict after Minimize: ", conflict.size());
-    }
+            auto lits = _mapWeight2Assum.rbegin()->second;
 
-    void threadMinimize(unsigned int num, bool fastMinimize) {
-        for(;;) {
-            auto element = CL_ConflictToMinimize.pop();
-            MonPrint("threadMinimize[",num,"]: Run...");
+            for(auto lit: lits) {
+                assert( _poids[lit] >= maxCostLit );
+                addClause({lit});
+                assum.erase(lit);
+                nbHarden++;
+            }
 
-            if(!element) {
+            if(_mapWeight2Assum.size() == 1) {
                 break;
             }
 
-            minimize(solverForMinimize[num], std::get<0>(*element), std::get<1>(*element), fastMinimize);
+            if(_mapWeight2Assum.rbegin()->second.size() == 0) {
+                _mapWeight2Assum.erase(prev(_mapWeight2Assum.end()));
+            }
         }
+
+        MonPrint("c NUMBER HARDEN : ", nbHarden);
+
+        return nbHarden;
     }
 
-    void apply_CL_CardToAdd(std::set<int, CompLit> &assumption) {
-        while(CL_CardToAdd.size()) {
-            auto element = CL_CardToAdd.pop();
-            assert(element);
 
-            save_card.push_back( {newCard(std::get<0>(*element)), 1} );
-            auto newAssumForCard = (*std::get<0>(save_card.back()) <= std::get<1>(save_card.back()));
+    double oneMinimize(std::vector<int>& conflict, double referenceTimeSec, unsigned int B=10, bool sort=true) {
+        Chrono C;
+        double minimize=0;
+        double noMinimize=0;
+        unsigned int nbRemoved=0;
 
-            assert(newAssumForCard != 0);
+        if(sort) {
+            //if(isWeighted()) {
+                std::sort(conflict.begin(), conflict.end(), [&](int litA, int litB){
 
-            MonPrint("solveLimited for Exhaust...");
-            if(std::get<1>(*element)) {
-                while(solver->solveLimited(std::vector<int>({newAssumForCard}), 10000) == -1) {
-                    std::get<1>(save_card.back())++;
-                    MonPrint("cost = ", cost, " + 1");
-                    cost++;
-                    newAssumForCard = ((*std::get<0>(save_card.back())) <= std::get<1>(save_card.back()));
+                    assert(_poids[litA] >= 0);
+                    assert(_poids[litB] >= 0);
 
-                    if(newAssumForCard==0) {
-                        break;
+                    if(_poids[ litA ] > _poids[ litB ])
+                        return true;
+                    if(_poids[ litA ] < _poids[ litB ]) {
+                        return false;
+                    }
+                    return abs(litA) < abs(litB);
+                });
+            //}
+        }
+
+        if(conflict.size()==0) {
+            return 0;
+        }
+        while( solver->solveLimited(conflict, 10*B, conflict.back()) == 0 ) {
+            conflict.pop_back();
+            minimize++;
+            nbRemoved++;
+            if(conflict.size()==0) {
+                return 0;
+            }
+
+            if((C.tacSec() > referenceTimeSec*getTimeRefCoef())) {
+                MonPrint("\t\tbreak minimize");
+                return conflict.size() / (double)_poids[ conflict.back() ];
+            }
+        }
+
+        t_weight weight = _poids[conflict.back()];
+        assert(weight>0);
+        //MaLib::MonRand::shuffle(conflict.begin(), conflict.end()-1);
+
+        for(int i=conflict.size()-2; i>=0; i--) {
+            switch(solver->solveLimited(conflict, B, conflict[i])) {
+            case -1: // UNKNOW
+                [[fallthrough]];
+            case 1: // SAT
+            {
+                noMinimize++;
+                break;
+            }
+
+            case 0: // UNSAT
+                conflict[i] = conflict.back();
+                conflict.pop_back();
+                minimize++;
+                nbRemoved++;
+                break;
+
+            default:
+                assert(false);
+            }
+
+            if( C.tacSec() > referenceTimeSec*getTimeRefCoef() ) {
+                break;
+            }
+        }
+
+        return conflict.size() / (double)weight;
+    }
+
+
+    //////////////////////////////
+    /// For extractAM
+    ///
+        void extractAM() {
+            adapt_am1_exact();
+            adapt_am1_FastHeuristicV7();
+        }
+
+        bool adapt_am1_exact() {
+            Chrono chrono;
+            unsigned int nbCliqueFound=0;
+            std::vector<int> assumption;
+
+            for(auto & [w, lits]: _mapWeight2Assum) {
+                assert(w != 0);
+                for(auto lit: lits) {
+                    assert( _poids[lit] > 0 );
+                    assumption.push_back(lit);
+                }
+            }
+
+            if(assumption.size() > 30000) { // hyper paramétre
+                MonPrint("skip");
+                return false;
+            }
+
+            MonPrint("Create graph for searching clique...");
+            unsigned int size = assumption.size();
+            bool **conn = new bool*[size];
+            for(unsigned int i=0; i<size; i++) {
+                conn[i] = new bool[size];
+                for(unsigned int x=0; x<size; x++)
+                    conn[i][x] = false;
+            }
+
+            MonPrint("Create link in graph...");
+            for(unsigned int i=0; i<size; ) {
+                int lit1 = assumption[i];
+
+                std::vector<int> prop;
+                // If literal in assumptions has a value that is resolvable, get array of all the other literals that must have
+                // a certain value in consequence, then link said literal to the opposite value of these other literals in graph
+
+                if(solver->propagate(std::vector<int>({lit1}), prop)) {
+                    for(int lit2: prop) {
+                        for(unsigned int j=0; j<size; j++) {
+                            if(j==i)
+                                continue;
+                            if(assumption[j] == -lit2) {
+                                conn[i][j] = true;
+                                conn[j][i] = true;
+                            }
+                        }
+                    }
+                    i++;
+                } else { // No solution - Remove literal from the assumptions and add its opposite as a clause
+                    addClause({-lit1});
+
+                    assumption[i] = assumption.back();
+                    assumption.pop_back();
+
+                    for(unsigned int x=0; x<size; x++) {
+                        conn[i][x] = false;
+                        conn[x][i] = false;
+                    }
+
+                    size--;
+                }
+            }
+
+            if(size == 0) {
+                for(unsigned int i=0; i<size; i++) {
+                    delete [] conn[i];
+                }
+                delete [] conn;
+                return true;
+            }
+
+            std::vector<bool> active(size, true);
+            for(;;) {
+                int *qmax;
+                int qsize=0;
+                Maxclique md(conn, size, 0.025);
+                md.mcqdyn(qmax, qsize, 100000);
+
+                if(qsize <= 2) { // Hyperparametre: Taille minimal a laquelle arreter la methode exact
+                    for(unsigned int i=0; i<size; i++) {
+                        delete [] conn[i];
+                    }
+                    delete [] conn;
+                    delete [] qmax;
+
+                    MonPrint(nbCliqueFound, " cliques found in ", (chrono.tacSec()), "sec.");
+                    return true;
+                }
+                nbCliqueFound++;
+
+                {
+                    //int newI=qmax[0];
+                    std::vector<int> clause;
+
+                    for (unsigned int i = 0; i < qsize; i++) {
+                        int lit = assumption[qmax[i]];
+                        active[qmax[i]] = false;
+                        clause.push_back(lit);
+
+                        for(unsigned int x=0; x<size; x++) {
+                            conn[qmax[i]][x] = false;
+                            conn[x][qmax[i]] = false;
+                        }
+                    }
+                    auto newAssum = processAtMostOne(clause);
+                    assert(qsize >= newAssum.size());
+
+                    for(unsigned int j=0; j<newAssum.size() ; j++) {
+                        assumption[ qmax[j] ] = newAssum[j];
+                        active[ qmax[j] ] = true;
+
+                        std::vector<int> prop;
+                        if(solver->propagate({newAssum[j]}, prop)) {
+                            for(int lit2: prop) {
+                                for(unsigned int k=0; k<size; k++) {
+                                    if(active[k]) {
+                                        if(assumption[k] == -lit2) {
+                                            conn[qmax[j]][k] = true;
+                                            conn[k][qmax[j]] = true;
+                                        }
+                                    }
+                                }
+                            }
+                         } else {
+                            assert(solver->solve(std::vector<int>({newAssum[j]})) == false);
+                            addClause({-newAssum[j]});
+                         }
+                    }
+                }
+
+                delete [] qmax;
+            }
+
+            assert(false);
+        }
+
+        // Harden soft vars in passed clique to then unrelax them via a new cardinality constraint
+        std::vector<int> processAtMostOne(std::vector<int> clause) {
+            std::vector<int> newAssum;
+
+            while(clause.size() > 1) {
+
+                assert([&](){
+                    for(unsigned int i=0; i<clause.size(); i++) {
+                        for(unsigned int j=i+1; j<clause.size(); j++) {
+                            assert(solver->solve(std::vector<int>({clause[i], clause[j]})) == 0 );
+                        }
+                    }
+                    return true;
+                }());
+
+                auto saveClause = clause;
+                auto w = _poids[ clause[0] ];
+                assert(w > 0);
+
+                for(unsigned int i=1; i<clause.size(); i++) {
+                    if( w > _poids[ clause[i] ] ) {
+                        w = _poids[ clause[i] ];
+                    }
+                }
+                assert(w > 0);
+
+                for(unsigned int i=0; i<clause.size(); ) {
+                    assert( _poids[clause[i]] > 0 );
+                    assert( _mapWeight2Assum[ _poids[ clause[i] ] ].count( clause[i] ) );
+                    _mapWeight2Assum[ _poids[ clause[i] ] ].erase( clause[i] );
+
+                    _poids.add( clause[i], -w );
+
+                    assert( _poids[ clause[i] ] >= 0 );
+                    if( _poids[ clause[i] ] == 0 ) {
+                        relax( clause[i] );
+                        clause[i] = clause.back();
+                        clause.pop_back();
+                    } else {
+                        _mapWeight2Assum[ _poids[ clause[i] ] ].insert( clause[i] );
+                        i++;
+                    }
+                }
+                MonPrint("AM1: cost = ", cost, " + ", w * (t_weight)(saveClause.size()-1));
+                cost += w * (t_weight)(saveClause.size()-1);
+
+                assert(saveClause.size() > 1);
+                newAssum.push_back( addClause(saveClause, w) );
+                assert(newAssum.back() != 0);
+                assert( _poids[ newAssum.back() ] > 0 );
+            }
+
+            if( clause.size() ) {
+                newAssum.push_back(clause[0]);
+            }
+            return newAssum;
+        }
+
+        void reduceCliqueV2(std::list<int> & clique) {
+            if(_mapWeight2Assum.size() > 1) {
+                clique.sort([&](int litA, int litB){
+                    assert( _poids[ -litA ] > 0 );
+                    assert( _poids[ -litB ] > 0 );
+
+                    return _poids[ -litA ] < _poids[ -litB ];
+                });
+            }
+            for(auto posImpliquant = clique.begin() ; posImpliquant != clique.end() ; ++posImpliquant) {
+                auto posImpliquant2 = posImpliquant;
+                for(++posImpliquant2 ; posImpliquant2 != clique.end() ; ) {
+                    if(solver->solveLimited(std::vector<int>({-(*posImpliquant), -(*posImpliquant2)}), 10000) != 0) { // solve != UNSAT
+                        posImpliquant2 = clique.erase(posImpliquant2);
+                    } else {
+                        ++posImpliquant2;
                     }
                 }
             }
-            MonPrint("Exhaust fini!");
-
-            if(newAssumForCard != 0) {
-                _weight[abs(newAssumForCard)] = 1;
-                assumption.insert( newAssumForCard );
-                mapAssum2card[ abs(newAssumForCard) ] = save_card.size()-1;
-            }
         }
-    }
 
-    void apply_CL_LitToRelax(std::set<int, CompLit> &assumption) {
-        while(CL_LitToRelax.size()) {
-            int lit = CL_LitToRelax.pop().value_or(0);
-            assert(lit != 0);
-            unsigned int var = abs(lit);
+        unsigned int adapt_am1_VeryFastHeuristic() {
+            std::vector<int> prop;
+            unsigned int nbCliqueFound=0;
 
-            _weight[var] = 0;
+            for(int VAR = 1; VAR<_poids.size(); VAR++) {
+                if(_poids[VAR] == 0)
+                    continue;
+                assert(_poids[VAR] != 0);
 
-            if(mapAssum2card[var] != -1) {
-                int idCard = mapAssum2card[var];
-                assert(idCard >= 0);
+                int LIT = _poids[VAR]>0?VAR:-VAR;
+                prop.clear();
 
-                std::get<1>(save_card[idCard])++;
-                int forCard = (*std::get<0>(save_card[idCard]) <= std::get<1>(save_card[idCard]));
+                if(solver->propagate({LIT}, prop)) {
+                    if(prop.size() == 0)
+                        continue;
 
-                if(forCard != 0) {
-                    assumption.insert( forCard );
-                    _weight[abs(forCard)] = 1;
-                    mapAssum2card[ abs(forCard) ] = idCard;
+                    for(auto litProp: prop) {
+                        if(_poids[litProp] < 0) {
+                            assert(solver->solve(std::vector<int>({-litProp, LIT})) == false);
+                            processAtMostOne( {-litProp, LIT} );
+                            nbCliqueFound++;
+                            if(_poids[VAR] == 0)
+                                break;
+                        }
+                    }
+                } else {
+                    nbCliqueFound++;
+                    addClause({-LIT});
                 }
             }
+
+            return nbCliqueFound;
         }
-    }
+
+        unsigned int adapt_am1_FastHeuristicV7() {
+            MonPrint("adapt_am1_FastHeuristic : (_weight.size() = ", _poids.size(), " )");
+
+            Chrono chrono;
+            std::vector<int> prop;
+            unsigned int nbCliqueFound=0;
+
+            for(int VAR = 1; VAR<_poids.size(); VAR++) {
+                if(_poids[VAR] == 0)
+                    continue;
+
+                assert(_poids[VAR] != 0);
+
+                int LIT = _poids[VAR]>0?VAR:-VAR;
+                prop.clear();
+                if(solver->propagate({LIT}, prop)) {
+                    if(prop.size() == 0)
+                        continue;
+
+                    std::list<int> clique;
+                    for(auto litProp: prop) {
+                        if(_poids[litProp] < 0) {
+                            clique.push_back(litProp);
+                            assert(solver->solve(std::vector<int>({-litProp, LIT})) == false);
+                        }
+                    }
+
+                    if(clique.size() == 0)
+                        continue;
+
+                    reduceCliqueV2(clique); // retirer des elements pour que clique soit une clique
+
+                    clique.push_back(-LIT);
+
+                    if(clique.size() >= 2) {
+                        nbCliqueFound++;
+
+                        std::vector<int> clause;
+                        for(auto lit: clique)
+                            clause.push_back(-lit);
+
+                        processAtMostOne(clause);
+                    }
+                } else {
+                    nbCliqueFound++;
+                    addClause({-LIT});
+                }
+            }
+
+            MonPrint(nbCliqueFound, " cliques found in ", chrono);
+            return nbCliqueFound;
+        }
+    ///
+    /// End for extractAM
+    ///////////////////////
 
 
 public:
+    void addWeight(int lit, long long weight) {
+        assert(lit != 0);
+        assert(weight != 0 && "Not an error, but it should not happen");
+        if(weight < 0) {
+            weight = -weight;
+            lit = -lit;
+        }
 
-    bool solve() {
-        // CONFIG
-        unsigned int nbSecondSolveMin = 20;
-        unsigned int timeOutForSecondSolve = 60;
-        // END CONFIG
-        
-        // Reinit CL
-        CL_ConflictToMinimize.clear();
-        CL_LitToUnrelax.clear();
-        CL_LitToRelax.clear();
-        CL_CardToAdd.clear();
+        while(abs(lit) >= _poids.size()) {
+            newVar();
+        }
 
-        MonPrint("\t\t\tMain Thread: extractAM...");
-        extractAM();
+        if( _poids[lit] == 0 ) {
+            _poids.set(lit, weight);
+            _mapWeight2Assum[weight].insert(lit);
+        } else {
+            if( _poids[lit] > 0 ) {
+                assert( _mapWeight2Assum[_poids[lit]].count( lit ) );
+                _mapWeight2Assum[_poids[lit]].erase( lit );
+                _poids.add(lit, weight);
+                assert( _poids[lit] < 0 ? !_mapAssum2Card[lit].has_value() : true ); // If -lit becomes a soft var, it should not be a cardinality
+            } else { // if( _poids[lit] < 0 )
+                assert( _mapWeight2Assum[_poids[-lit]].count( -lit ) );
+                _mapWeight2Assum[_poids[-lit]].erase( -lit );
 
-        std::set<int, CompLit> assumption;
+                cost += std::min(weight, _poids[-lit]);
+                _poids.add(lit, weight);
+                assert( _poids[-lit] > 0 ? !_mapAssum2Card[-lit].has_value() : true ); // If lit becomes a soft var, it should not be a cardinality
+            }
 
-        for(unsigned int i=1; i<_weight.size(); i++) {
-            if(_weight[i] > 0) {
-                if(model[i]) {
-                    assumption.insert(static_cast<int>(i));
+            if(_poids[lit] != 0) {
+                if(_poids[lit] > 0) {
+                    _mapWeight2Assum[_poids[lit]].insert( lit );
                 } else {
-                    assumption.insert(-static_cast<int>(i));
+                    _mapWeight2Assum[-_poids[lit]].insert( -lit );
                 }
+            } else {
+                relax(lit);
             }
         }
+    }
+private:
 
-        if(assumption.size() > 100000) {
-            nbSecondSolveMin = 3;           // hyperparametre
+
+    // If a soft variable is not soft anymore, we have to check if this variable is a cardinality, in which case, we have to relax the cardinality.
+    std::optional<int> relax(int lit) {
+        assert(lit != 0);
+        std::optional<int> newSoftVar;
+
+        unsigned int var = abs(lit);
+
+        if(_mapAssum2Card[var].has_value()) { // If there is a cardinality constraint associated to this soft var
+            int forCard = _mapAssum2Card[ var ]->card->atMost( _mapAssum2Card[ var ]->atMost + 1 );
+
+            if(forCard != 0) {
+                if( _mapAssum2Card[abs(forCard)].has_value() == false ) {
+                    _mapAssum2Card[abs(forCard)] = LitCard(_mapAssum2Card[var]->card,  _mapAssum2Card[var]->atMost + 1,  _mapAssum2Card[var]->initialWeight);
+                    assert( forCard == _mapAssum2Card[abs(forCard)]->getLit() );
+
+                    _poids.set(forCard, _mapAssum2Card[abs(forCard)]->initialWeight);
+                    _mapWeight2Assum[_poids[forCard]].insert( forCard );
+
+                    newSoftVar = forCard;
+                }
+            }
+
+            if(_poids[lit] == 0) {
+                _mapAssum2Card[var].reset();
+            }
+        }
+        return newSoftVar;
+    }
+
+    t_weight chooseNextMinWeight(t_weight minWeightToConsider=std::numeric_limits<t_weight>::max()) {
+        auto previousWeight = minWeightToConsider;
+
+        if(_mapWeight2Assum.size() <= 1) {
+            return 1;
         }
 
-        std::vector<std::thread> vMinimizeThread;
-        vMinimizeThread.reserve(nbMinimizeThread);
-        for(unsigned int i=0; i<nbMinimizeThread; i++) {
-            vMinimizeThread.emplace_back(&EvalMaxSAT::threadMinimize, this, i, assumption.size() > 100000);
-        }
-
-        MonPrint("\t\t\tMain Thread: Debut");
         for(;;) {
-            assert(CL_ConflictToMinimize.size()==0);
-            assert(CL_LitToUnrelax.size()==0);
-            assert(CL_LitToRelax.size()==0);
-            assert(CL_CardToAdd.size()==0);
-            numberMinimizeThreadRunning = nbMinimizeThread;
+            auto it = _mapWeight2Assum.lower_bound(minWeightToConsider);
+            if(it == _mapWeight2Assum.begin()) {
+                return 1;
+            }
+            --it;
 
-            //auto s2 = solver->clone();
-
-            bool firstSolve = true;
-            for(;;) {
-                std::vector<int> forSolve(assumption.begin(), assumption.end());
-
-                chronoLastSolve.tic();
-                MonPrint("\t\t\tMain Thread: Solve...");
-
-                bool conflictFound;
-                if(firstSolve) {
-                    MonPrint("solve(",forSolve.size(),")...");
-                    conflictFound = (solver->solve(forSolve) == false);
-                } else {
-                    MonPrint("solveLimited(",forSolve.size(),")...");
-                    conflictFound = (solver->solveLimited(forSolve, 10000) == -1);
-                }
-
-                if(!conflictFound) {
-                    MonPrint("\t\t\tMain Thread: Solve() is not false!");
-
-                    if(firstSolve) {
-                        CL_ConflictToMinimize.close(); // Va impliquer la fin des threads minimize
-                        for(auto &t: vMinimizeThread)
-                            t.join();
-
-                        return true;
-                    }
-
-                    chronoLastSolve.pause(true);
-                    MonPrint("\t\t\tMain Thread: CL_ConflictToMinimize.wait(nbMinimizeThread=",nbMinimizeThread,", true)...");
-                    do {
-                        if(CL_LitToUnrelax.size()) {
-                            MonPrint("\t\t\tMain Thread: CL_LitToUnrelax.size() = ", CL_LitToUnrelax.size());
-                            break;
-                        }
-                        numberMinimizeThreadRunning = nbMinimizeThread - CL_ConflictToMinimize.getNumberWaiting();
-                        assert(numberMinimizeThreadRunning <= nbMinimizeThread);
-                    } while( CL_ConflictToMinimize.wait(nbMinimizeThread, true) < nbMinimizeThread );
-                    MonPrint("\t\t\tMain Thread: Fin boucle d'attente");
-
-                    if(CL_LitToUnrelax.size()==0) {
-                        MonPrint("\t\t\tMain Thread: CL_LitToUnrelax.size()==0");
-
-                        MonPrint("\t\t\tMain Thread: CL_LitToRelax.size() = ", CL_LitToRelax.size());
-                        apply_CL_LitToRelax(assumption);
-
-                        MonPrint("\t\t\tMain Thread: CL_CardToAdd.size() = ", CL_CardToAdd.size());
-                        apply_CL_CardToAdd(assumption);
-
-
-                        break;
-                    }
-                    MonPrint("\t\t\tMain Thread: CL_LitToUnrelax.size()!=0");
-                } else {
-                    MonPrint("\t\t\tMain Thread: Solve = false");
-                    chronoLastSolve.pause(true);
-
-                    std::vector<int> bestUnminimizedConflict = solver->getConflict();
-                    if(bestUnminimizedConflict.size() == 0) {
-                        cost = -1;
-                        return false;
-                    }
-
-                    MonPrint("\t\t\tMain Thread: cost = ", cost, " + 1");
-                    cost++;
-
-                    MaLib::Chrono chronoForBreak;
-                    unsigned int nbSecondSolve = 0;
-
-                    MonPrint("\t\t\tMain Thread: Second solve...");
-                    while((nbSecondSolve < nbSecondSolveMin) || (chronoLastSolve.tac() >= chronoForBreak.tac())) {
-                        if(bestUnminimizedConflict.size() == 1)
-                            break;
-                        nbSecondSolve++;
-                        if(chronoForBreak.tacSec() > timeOutForSecondSolve)
-                            break;
-                        if(nbSecondSolve > 10000)
-                            break;
-
-                        std::random_shuffle(forSolve.begin(), forSolve.end());
-
-                        bool res = solver->solve(forSolve);
-                        assert(!res);
-
-                        if( bestUnminimizedConflict.size() > solver->sizeConflict() ) {
-                            bestUnminimizedConflict = solver->getConflict();
-                        }
-                    }
-                    MonPrint("\t\t\tMain Thread: ", nbSecondSolve, " solves done in ", chronoForBreak.tacSec(), "sec");
-
-                    std::list<int> conflictMin;
-                    for(auto lit: bestUnminimizedConflict)
-                        conflictMin.push_back(-lit);
-
-                    bool doFullMinimize = true;
-                    if((assumption.size() < 100000) && (conflictMin.size() > 1)) {
-                        MonPrint("\t\t\tMain Thread: fastMinimize(", conflictMin.size(), ")");
-                        doFullMinimize = fastMinimize(solver, conflictMin);
-                    }
-
-                    MonPrint("\t\t\tMain Thread: taille final du comflict = ", conflictMin.size());
-
-                    if(conflictMin.size() == 1) {
-                        MonPrint("\t\t\tMain Thread: Optimal found, no need to fullMinimize");
-                        doFullMinimize = false;
-                    }
-
-                    for(auto lit: conflictMin) {
-                        assumption.erase(lit);
-                    }
-
-                    //assert(s2->solve(conflictMin)==false); // This assert can be false. Why??
-
-                    if(doFullMinimize) {
-                        MonPrint("\t\t\tMain Thread: call CL_ConflictToMinimize.push");
-
-                        if(nbMinimizeThread == 0) {
-                            minimize(solver, conflictMin, chronoLastSolve.tac(), assumption.size() > 100000);
-                        } else {
-                            CL_ConflictToMinimize.push({conflictMin, chronoLastSolve.tac()});
-                        }
-
-                        firstSolve = false;
-                    } else {
-                        for(auto lit: conflictMin) {
-                            CL_LitToRelax.push(lit);
-                        }
-                        if(conflictMin.size() > 1) {
-                            MonPrint("\t\t\tMain Thread: new card");
-                            std::vector<int> L;
-                            for(auto lit: conflictMin) {
-                                L.push_back(-lit);
-                            }
-                            CL_CardToAdd.push({L, true});
-                        }
-                        if(firstSolve) {
-                            apply_CL_LitToRelax(assumption);
-                            apply_CL_CardToAdd(assumption);
-                        }
-                    }
-                }
-
-                while(CL_LitToUnrelax.size()) {
-                    auto element = CL_LitToUnrelax.pop();
-                    assert(element);
-                    assumption.insert(*element);
-                }
+            if(it == _mapWeight2Assum.end()) {
+                assert(!"possible ?");
+                return 1;
             }
 
-            //delete s2;
+            if( it->second.size() == 0 ) {
+                _mapWeight2Assum.erase(it);
+
+                if(_mapWeight2Assum.size() <= 1) {
+                    return 1;
+                }
+            } else {
+               auto it2 =it;
+               it2--;
+               if(it2 == _mapWeight2Assum.end()) {
+                   MonPrint("minWeightToConsider == ", 1);
+                   return 1;
+               }
+
+               /*
+               if(it2->first < it->first * 0.1 ) {   // hyper paramétre
+                   MonPrint("minWeightToConsider apres = ", it->first);
+                   return it->first;
+               }
+               */
+
+               if(it2->first < previousWeight * 0.5) {  // hyper paramétre
+                   MonPrint("minWeightToConsider = ", it->first);
+                   return it->first;
+               }
+
+               minWeightToConsider = it->first;
+            }
         }
 
-        return true;
+        assert(false);
+        return 1;
     }
 
-
-    void setTimeOutFast(unsigned int timeOutFastMinimize) {
-        _timeOutFastMinimize = timeOutFastMinimize;
-    }
-
-    void setCoefMinimize(unsigned int coefMinimizeTime) {
-        _coefMinimizeTime = coefMinimizeTime;
-    }
-
-
+public:
     unsigned int nInputVars=0;
     void setNInputVars(unsigned int nInputVars) {
         this->nInputVars=nInputVars;
     }
-
-    int getCost() {
-        return cost;
-    }
-
-    bool getValue(unsigned int var) {
-        return solver->getValue(var);
-    }
-
-    virtual unsigned int nVars() {
+    unsigned int nVars() {
         return solver->nVars();
-    }
-
-    virtual unsigned int nClauses() {
-        return solver->nClauses();
-    }
-
-    virtual unsigned int newSoftVar(bool value, bool decisionVar, unsigned int weight) {
-        assert(weight==1);
-        _weight.push_back(weight);
-        mapAssum2card.push_back(-1);
-        model.push_back(value);
-
-        unsigned int var = solver->newVar(decisionVar);
-        for(auto s: solverForMinimize) {
-            unsigned int var2 = s->newVar(decisionVar);
-            assert(var == var2);
-        }
-
-        assert(var == _weight.size()-1);
-
-        return var;
-    }
-
-    virtual unsigned int newVar(bool decisionVar=true) {
-        _weight.push_back(0);
-        mapAssum2card.push_back(-1);
-        model.push_back(false);
-
-        unsigned int var = solver->newVar(decisionVar);
-        for(auto s: solverForMinimize) {
-            unsigned int var2 = s->newVar(decisionVar);
-            assert(var == var2);
-        }
-
-        assert(var == _weight.size()-1);
-
-        return var;
-    }
-
-    virtual bool isSoft(unsigned int var) {
-        return _weight[var] > 0;
-    }
-
-    virtual void setVarSoft(unsigned int var, bool value, unsigned int weight) {
-        assert(weight==1);
-        if(var >= _weight.size()) {
-            _weight.resize(var+1, 0);
-            mapAssum2card.resize(var+1, -1);
-            model.resize(var+1);
-        }
-
-        assert(_weight[var] == 0);      // We assum the variable is not already soft
-        _weight[var] = weight;
-        model[var] = value;
-    }
-
-    virtual unsigned int nSoftVar() {
-        unsigned int result = 0;
-        for(auto w: _weight)
-            if(w!=0)
-                result++;
-        return result;
-    }
-
-private:
-
-    bool fullMinimize(VirtualSAT* solverForMinimize, std::set<int> &conflict, std::vector<int> &uselessLit, long timeRef) {
-        MaLib::Chrono chrono;
-        bool minimum = true;
-
-        int B = 1000;
-        //int B = 10000;
-
-        if(timeRef > 60000000) {
-            timeRef = 60000000;  // Hyperparameter
-        }
-
-        std::vector<int> removable;
-        MonPrint("\t\t\t\t\tfullMinimize: Calculer Removable...");
-        for(auto it = conflict.begin(); it != conflict.end(); ++it) {
-            auto lit = *it;
-
-            switch(solverForMinimize->solveLimited(conflict, B, lit)) {
-            case 0:
-                minimum = false;
-                [[fallthrough]];
-            case 1:
-                break;
-
-            case -1:
-                removable.push_back(lit);
-                break;
-
-            default:
-                assert(false);
-            }
-        }
-        MonPrint("\t\t\t\t\tfullMinimize: removable = ", removable.size(), "/", conflict.size());
-
-        if(removable.size() <= 1) {
-            uselessLit = removable;
-            for(auto lit: uselessLit) {
-                conflict.erase(lit);
-            }
-            return minimum;
-        }
-
-        int maxLoop = 10000;
-        if(removable.size() < 8) {
-            maxLoop = 2*std::tgamma(removable.size());
-        }
-
-        chrono.tic();
-        for(int i=0; i<maxLoop; i++) {
-            std::set<int> wConflict = conflict;
-            std::vector<int> tmp_uselessLit;
-            for(auto lit: removable) {
-                switch(solverForMinimize->solveLimited(wConflict, B, lit)) {
-                    case 0:
-                        minimum = false;
-                        [[fallthrough]];
-                    case 1:
-                        break;
-
-                    case -1:
-                        wConflict.erase(lit);
-                        tmp_uselessLit.push_back(lit);
-                        break;
-
-                    default:
-                        assert(false);
-                }
-                /*
-                if((timeRef*numberMinimizeThreadRunning <= chrono.tac()) && (B > 100)) {
-                    MonPrint("\t\t\t\t\tfullMinimize: B=100");
-                    B=100;
-                }
-                if((timeRef*numberMinimizeThreadRunning*2 <= chrono.tac()) && (B > 0)) {
-                    MonPrint("\t\t\t\t\tfullMinimize: B=0");
-                    B=0;
-                }
-                */
-                /*
-                if( (chrono.tacSec() >= _timeOutFastMinimize) && (chrono.tac() >= timeRef*(numberMinimizeThreadRunning+1)) && (B > 10) ) {
-                    MonPrint("\t\t\t\t\tfullMinimize: B=10");
-                    B=10;
-                }
-                */
-            }
-
-            if(tmp_uselessLit.size() > uselessLit.size()) {
-                MonPrint("\t\t\t\t\tfullMinimize: newBest: ", tmp_uselessLit.size(), " removes.");
-                uselessLit = tmp_uselessLit;
-            }
-
-            if(uselessLit.size() >= removable.size()-1) {
-                MonPrint("\t\t\t\t\tfullMinimize: Optimal trouvé.");
-                break;
-            }
-
-            if((i>=2) // Au moins 3 loops
-                    && (timeRef*(1+numberMinimizeThreadRunning) <= chrono.tac())) {
-                MonPrint("\t\t\t\t\tfullMinimize: TimeOut after ", (i+1), " loops");
-                break;
-            }
-
-            std::random_shuffle(removable.begin(), removable.end());
-        }
-
-        for(auto lit: uselessLit) {
-            conflict.erase(lit);
-        }
-
-        return minimum;
-    }
-
-
-    bool fastMinimize(VirtualSAT* solverForMinimize, std::list<int> &conflict) {
-        int B = 1;
-
-        Chrono chrono;
-        for(auto it = conflict.begin(); it != conflict.end(); ++it) {
-
-            if(chrono.tacSec() > _timeOutFastMinimize) {  // Hyperparameter
-                MonPrint("TIMEOUT fastMinimize!");
-                return false;
-            }
-
-            auto lit = *it;
-            it = conflict.erase(it);
-
-            switch(solverForMinimize->solveLimited(conflict, B)) {
-            case 0:
-                [[fallthrough]];
-            case 1:
-                it = conflict.insert(it, lit);
-                break;
-
-            case -1:
-                break;
-
-            default:
-                assert(false);
-            }
-        }
-
-        return true;
     }
 };
 
 
-EvalMaxSAT::~EvalMaxSAT() {
-    CL_ConflictToMinimize.close();
-    CL_LitToUnrelax.close();
-    CL_LitToRelax.close();
-    CL_CardToAdd.close();
-
-    delete solver;
-    for(auto s: solverForMinimize) {
-        delete s;
-    }
-}
 
 
 
 #endif // EVALMAXSAT_SLK178903R_H
+
