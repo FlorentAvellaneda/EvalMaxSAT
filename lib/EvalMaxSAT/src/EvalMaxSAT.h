@@ -347,7 +347,13 @@ public:
         }
 
         if(_mapWeight2Assum.size() == 0) {
-            return solver->solve();
+            if(solver->solve()) {
+                solutionCost = cost;
+                solution = solver->getSolution();
+                return true;
+            }
+            
+            return false;
         }
 
         if(harden(assum)) {
