@@ -346,6 +346,10 @@ public:
             return true;
         }
 
+        if(_mapWeight2Assum.size() == 0) {
+            return solver->solve();
+        }
+
         if(harden(assum)) {
             assert(_mapWeight2Assum.size());
             if(adapt_am1_VeryFastHeuristic()) {
