@@ -388,7 +388,7 @@ public:
         auto minWeightToConsider = chooseNextMinWeight( _mapWeight2Assum.rbegin()->first + 1 );
         assum = initAssum(minWeightToConsider);
 
-        std::cout << "o " << solutionCost << std::endl;
+        //std::cout << "o " << solutionCost << std::endl;
 
         int resultLastSolve;
         for(;;) {

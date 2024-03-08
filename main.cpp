@@ -71,13 +71,13 @@ void signalHandler( int signum ) {
 
 
 template<class SOLVER>
-std::tuple<std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::string file, double targetComputationTime=3600) {
+std::tuple<bool, std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::string file, double targetComputationTime=3600) {
     cur_file = file;
 
     if(!parse(file, monMaxSat)) {
         std::cerr << "Unable to read the file " << file << std::endl;
         assert(false);
-        return std::make_tuple<std::vector<bool>, t_weight>({},-1);
+        return std::make_tuple<bool, std::vector<bool>, t_weight>(false, {},-1);
     }
 
     monMaxSat->setTargetComputationTime( targetComputationTime - TotalChrono.tacSec() );
@@ -85,13 +85,13 @@ std::tuple<std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::string
         monMaxSat->disableOptimize();
     }
     if(!monMaxSat->solve()) {
-        std::cout << "s UNSATISFIABLE" << std::endl;
-        return std::make_tuple<std::vector<bool>, t_weight>({},-1);
+        //std::cout << "s UNSATISFIABLE" << std::endl;
+        return std::make_tuple<bool, std::vector<bool>, t_weight>(false, {},-1);
     }
 
     assert(monMaxSat->solutionCost == calculateCost(file, monMaxSat->solution));
 
-    return {monMaxSat->solution, calculateCost(file, monMaxSat->solution)};
+    return {true, monMaxSat->solution, calculateCost(file, monMaxSat->solution)};
 }
 
 
@@ -157,39 +157,43 @@ int main(int argc, char *argv[])
         monMaxSat->unactivateUBStrategy();
     }
 
-    auto [solution, cost] = solveFile(monMaxSat.get(), file, targetComputationTime);
+    auto [sat, solution, cost] = solveFile(monMaxSat.get(), file, targetComputationTime);
 
     if(bench) {
         std::cout << file << "\t" << calculateCost(file, solution) << "\t" << TotalChrono.tacSec() << std::endl;
     } else {
-        if(oldOutputFormat) {
-            ////// PRINT SOLUTION OLD FORMAT //////////////////
-            ///
-                std::cout << "o " << calculateCost(file, solution) << std::endl;
-                std::cout << "s OPTIMUM FOUND" << std::endl;
-                std::cout << "v";
-                for(unsigned int i=1; i<solution.size(); i++) {
-                    if(solution[i]) {
-                        std::cout << " " << i;
-                    } else {
-                        std::cout << " -" << i;
+        if(sat) {
+            if(oldOutputFormat) {
+                ////// PRINT SOLUTION OLD FORMAT //////////////////
+                ///
+                    std::cout << "o " << calculateCost(file, solution) << std::endl;
+                    std::cout << "s OPTIMUM FOUND" << std::endl;
+                    std::cout << "v";
+                    for(unsigned int i=1; i<solution.size(); i++) {
+                        if(solution[i]) {
+                            std::cout << " " << i;
+                        } else {
+                            std::cout << " -" << i;
+                        }
                     }
-                }
-                std::cout << std::endl;
-            ///
-            ///////////////////////////////////////
+                    std::cout << std::endl;
+                ///
+                ///////////////////////////////////////
+            } else {
+                ////// PRINT SOLUTION NEW FORMAT //////////////////
+                ///
+                    std::cout << "o " << calculateCost(file, solution) << std::endl;
+                    std::cout << "s OPTIMUM FOUND" << std::endl;
+                    std::cout << "v ";
+                    for(unsigned int i=1; i<solution.size(); i++) {
+                        std::cout << solution[i];
+                    }
+                    std::cout << std::endl;
+                ///
+                ///////////////////////////////////////
+            }
         } else {
-            ////// PRINT SOLUTION NEW FORMAT //////////////////
-            ///
-                std::cout << "o " << calculateCost(file, solution) << std::endl;
-                std::cout << "s OPTIMUM FOUND" << std::endl;
-                std::cout << "v ";
-                for(unsigned int i=1; i<solution.size(); i++) {
-                    std::cout << solution[i];
-                }
-                std::cout << std::endl;
-            ///
-            ///////////////////////////////////////
+            std::cout << "s UNSATISFIABLE" << std::endl;
         }
     }
 
