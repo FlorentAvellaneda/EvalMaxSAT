@@ -36,37 +36,47 @@ bool oldOutputFormat = false;
 unsigned int bench = 0;
 
 void signalHandler( int signum ) {
+    std::cout << "c Interrupt signal (" << signum << ") received."<< std::endl;
 
     if(monMaxSat != nullptr) {
         if(bench) {
                 std::cout << cur_file << "\t" << calculateCost(cur_file, monMaxSat->solution) << "\t" << TotalChrono.tacSec() << std::endl;
-        } else
-        if(oldOutputFormat) {
-            std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
-            std::cout << "s OPTIMUM FOUND" << std::endl;
-            std::cout << "v";
-            for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
-                if(monMaxSat->solution[i]) {
-                    std::cout << " " << i;
-                } else {
-                    std::cout << " -" << i;
-                }
-            }
-            std::cout << std::endl;
         } else {
-            std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
-            std::cout << "s UNKNOWN" << std::endl;
-            //std::cout << "o " << calculateCost(file, solution) << std::endl;
-            std::cout << "v ";
-            for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
-                std::cout << monMaxSat->solution[i];
+            t_weight cost = calculateCost(cur_file, monMaxSat->solution);
+
+            if(cost != -1) {
+                if(oldOutputFormat) {
+                    std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+                    std::cout << "s SATISFIABLE" << std::endl;
+                    std::cout << "v";
+                    for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
+                        if(monMaxSat->solution[i]) {
+                            std::cout << " " << i;
+                        } else {
+                            std::cout << " -" << i;
+                        }
+                    }
+                    std::cout << std::endl;
+                } else {
+                    std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+                    std::cout << "s SATISFIABLE" << std::endl;
+                    //std::cout << "o " << calculateCost(file, solution) << std::endl;
+                    std::cout << "v ";
+                    for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
+                        std::cout << monMaxSat->solution[i];
+                    }
+                    std::cout << std::endl;
+                }
+                exit(10); // The solver finds a solution satisfying the hard clauses but does not prove it to be optimal
+            } else {
+                std::cout << "s UNKNOWN" << std::endl;
+                exit(0); // The solver cannot find a solution satisfying the hard clauses or prove unsatisfiability
             }
-            std::cout << std::endl;
         }
     }
 
-    //std::cout << "c Interrupt signal (" << signum << ") received, curFile = "<<cur_file<< std::endl;
-    exit(signum);
+
+    exit(0); // Bench mode
 }
 
 
@@ -192,14 +202,16 @@ int main(int argc, char *argv[])
                 ///
                 ///////////////////////////////////////
             }
+            return 30; // OPT
         } else {
             std::cout << "s UNSATISFIABLE" << std::endl;
+            return 20; // UNSAT
         }
     }
 
     assert(calculateCost(file, solution) == cost);
 
-    return 0;
+    return 0; // Bench mode
 }
 
 

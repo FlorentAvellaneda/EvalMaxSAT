@@ -185,7 +185,7 @@ t_weight calculateCost(const std::string & file, std::vector<bool> &result) {
                     }
                 }
                 if(!sat) {
-                    std::cerr << "Error : solution no SAT !" << std::endl;
+                    //std::cerr << "Error : solution no SAT !" << std::endl;
                     return -1;
                 }
             } else {
