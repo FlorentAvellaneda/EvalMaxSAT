@@ -172,7 +172,7 @@ t_weight calculateCost(const std::string & file, std::vector<bool> &result) {
         else {
             t_weight weight = parseWeight(in);
             readClause(in, lits);
-            if(weight == weightForHardClause) {
+            if(weight >= weightForHardClause) {
                 bool sat=false;
                 for(auto l: lits) {
                     if(abs(l) >= result.size()) {
@@ -274,7 +274,7 @@ bool parse(const std::string& filePath, MAXSAT_SOLVER* solveur) {
             t_weight weight = parseWeight(in);
             std::vector<int> clause = readClause(in, solveur);
 
-            if(weight == weightForHardClause) {
+            if(weight >= weightForHardClause) {
                 solveur->addClause(clause);
             } else {
                 // If it is a soft clause, we have to save it to add it once we are sure we know the total number of variables.
@@ -305,73 +305,6 @@ std::vector<int> readClause(StreamBuffer &in) {
 
     return clause;
 }
-
-std::tuple<std::vector<std::vector<int>>, std::vector<uint64_t>, uint64_t>  parse(const std::string& filePath) {
-    savePourTest_file = filePath;
-
-    std::vector<std::vector<int> > result_clauses;
-    std::vector<uint64_t> result_weights;
-    uint64_t weightForHardClause = -1;
-
-    auto gz = gzopen( filePath.c_str(), "rb");
-
-    StreamBuffer in(gz);
-
-    if(*in == EOF) {
-        std::cerr << "c PARSE ERROR! " << std::endl;
-        return {{}, {}, 0};
-    }
-
-    std::vector < std::tuple < std::vector<int>, uint64_t> > softClauses;
-
-    for(;;) {
-        skipWhitespace(in);
-
-        if(*in == EOF) {
-            break;
-        }
-
-        if(*in == 'c') {
-            skipLine(in);
-        } else if(*in == 'p') { // Old format
-            ++in;
-            if(*in != ' ') {
-                std::cerr << "c PARSE ERROR! Unexpected char: " << static_cast<char>(*in) << std::endl;
-                return {{}, {}, 0};
-            }
-            skipWhitespace(in);
-
-            if(eagerMatch(in, "wcnf")) {
-                parseInt(in); // # Var
-                parseInt(in); // # Clauses
-                weightForHardClause = parseWeight(in);
-            } else {
-                std::cerr << "c PARSE ERROR! Unexpected char: " << static_cast<char>(*in) << std::endl;
-                return {{}, {}, 0};
-            }
-        } else {
-            uint64_t weight = parseWeight(in);
-            std::vector<int> clause = readClause(in);
-
-            if(weight == weightForHardClause) {
-                result_clauses.push_back(clause);
-                result_weights.push_back(weightForHardClause);
-            } else {
-                // If it is a soft clause, we have to save it to add it once we are sure we know the total number of variables.
-                softClauses.push_back({clause, weight});
-            }
-        }
-    }
-
-    for(auto & [clause, weight]: softClauses) {
-        result_clauses.push_back(clause);
-        result_weights.push_back(weight);
-    }
-
-    gzclose(gz);
-    return {result_clauses, result_weights, weightForHardClause};
- }
-
 
 
 

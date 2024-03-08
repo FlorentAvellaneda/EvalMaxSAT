@@ -259,7 +259,6 @@ public:
 
     int addClause(const std::vector<int> &clause, std::optional<long long> w = {}) {
         if( w.has_value() == false ) { // Hard clause
-
             if( (clause.size() == 1) && ( _poids[clause[0]] != 0 ) ) {
                 if( _poids[clause[0]] < 0 ) {
                     assert( _mapWeight2Assum[ _poids[-clause[0]] ].count( -clause[0] ) );
@@ -276,15 +275,29 @@ public:
 
             solver->addClause(clause);
         } else {
+            if(w.value() == 0)
+                return 0;
             if(clause.size() > 1) { // Soft clause, i.e, "hard" clause with a soft var at the end
-                auto softVar = newSoftVar(true, w.value());
-                std::vector<int> softClause = clause;
-                softClause.push_back( -softVar );
-                addClause(softClause);
-                assert(softVar > 0);
-                return softVar;
-            } else { // Special case: unit clause.
+                if( w.value() > 0 ) {
+                    auto softVar = newSoftVar(true, w.value());
+                    std::vector<int> softClause = clause;
+                    softClause.push_back( -softVar );
+                    addClause(softClause);
+                    assert(softVar > 0);
+                    return softVar;
+                } else {
+                    assert(w.value() < 0);
+                    auto softVar = newSoftVar(true, -w.value());
+                    for(auto lit: clause) {
+                        addClause({ -softVar, lit });
+                    }
+                    assert(softVar > 0);
+                    return softVar;
+                }
+            } else if(clause.size() == 1) { // Special case: unit clause.
                 addWeight(clause[0], w.value());
+            } else { assert(clause.size() == 0); // Special case: empty soft clause.
+                cost += w.value();
             }
         }
         return 0;
