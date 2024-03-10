@@ -1,8 +1,27 @@
-cmake_minimum_required(VERSION 3.5)
-
+cmake_minimum_required(VERSION 3.12)
 get_filename_component(projectName ${CMAKE_CURRENT_SOURCE_DIR} NAME)
-
 message("cmake for ${projectName}")
+project(${projectName})
+
+# List of local libraries
+set(localLibs
+	MaLib
+    cadical
+)
+
+# List of external libraries
+set(externLibs
+    
+)
+
+
+set(CMAKE_CXX_STANDARD 20)
+
+FOREACH(localLib ${localLibs})
+    if(NOT TARGET ${localLib})
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../${localLib} ${CMAKE_CURRENT_BINARY_DIR}/${localLib})
+    endif()
+ENDFOREACH(localLib)
 
 file(
 	GLOB_RECURSE
@@ -10,64 +29,33 @@ file(
 	src/*
 )
 
-set(localLibs
-	MaLib
-        cadical
+add_library (
+    ${projectName}
+    ${source_files}
 )
 
-set(externLibs
+FOREACH(localLib ${localLibs})
+    target_include_directories(${projectName} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../${localLib})
+ENDFOREACH(localLib)
 
+target_include_directories(${projectName} PUBLIC
+	${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(${projectName} 
+    ${localLibs}
+    ${externLibs}
 )
 
 
-add_definitions(-DNDEBUG)
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3")
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O0 -g")
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -g")
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -static -lrt -pthread -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
 
+#install(TARGETS ${projectName}
+#	LIBRARY DESTINATION lib
+#	ARCHIVE DESTINATION lib
+#)
 
-if(TARGET ${projectName})
-
-	message("${projectName} is already defined")
-
-else()
-
-	FOREACH (localLib ${localLibs})
-		add_subdirectory (./../${localLib} ${localLib})
-	ENDFOREACH(localLib)
-
-
-
-	add_library (
-		${projectName}
-		${source_files}
-	)
-
-	install(TARGETS ${projectName} 	LIBRARY DESTINATION lib
-		                	ARCHIVE DESTINATION lib
-	)
-
-
-	FOREACH (localLib ${localLibs})
-		include_directories (../${localLib}/src)
-	ENDFOREACH(localLib)
-
-
-
-
-	set(LIB_LINK
-		${localLibs}
-		${externLibs}
-	)
-
-	target_link_libraries(${projectName}
-	    ${LIB_LINK}
-	)
-
-
-endif()
-
-
-
-
+install(TARGETS ${projectName}
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

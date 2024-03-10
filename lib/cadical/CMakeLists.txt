@@ -1,76 +1,34 @@
-cmake_minimum_required(VERSION 3.5)
-
+cmake_minimum_required(VERSION 3.12)
 
 get_filename_component(projectName ${CMAKE_CURRENT_SOURCE_DIR} NAME)
 
 message("cmake for ${projectName}")
 
+project(${projectName})
+
+# Spécifiez la version de C++ ici si nécessaire
+set(CMAKE_CXX_STANDARD 20)
 
 file(
-        GLOB_RECURSE
-        source_files
-        src/*
+	GLOB_RECURSE
+	source_files
+	src/*
 )
-
-set(localLibs
-
-        )
-
-set(externLibs
-        m
-        z
-        )
-
-add_definitions(-DNDEBUG)
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -static -lrt -pthread -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
-
 
 find_package(ZLIB)
 include_directories(${ZLIB_INCLUDE_DIR})
 
 
-if(TARGET ${projectName})
-
-    message("${projectName} is already defined")
-
-else()
-
-    FOREACH (localLib ${localLibs})
-        add_subdirectory (./../${localLib} ${localLib})
-    ENDFOREACH(localLib)
-
-    include_directories (src)
-
-    message(STATUS "foo include dir: ${source_files}")
-    add_library (
-            ${projectName}
-            ${source_files}
-    )
-
-    install(TARGETS ${projectName} 	LIBRARY DESTINATION lib
-            ARCHIVE DESTINATION lib
-            )
+add_library (
+	cadical
+	${source_files}
+)
 
 
-    FOREACH (localLib ${localLibs})
-        include_directories (../${localLib}/src)
-    ENDFOREACH(localLib)
+target_include_directories(cadical PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 
-
-
-    set(LIB_LINK
-            ${localLibs}
-            ${externLibs}
-            )
-
-    target_link_libraries(${projectName}
-            ${LIB_LINK}
-            )
-
-
-endif()
-
-
+# Liez MonSolveur avec MaLib
+target_link_libraries(cadical ${ZLIB_LIBRARIES})
 
 

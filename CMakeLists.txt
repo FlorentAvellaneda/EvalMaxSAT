@@ -1,61 +1,51 @@
-cmake_minimum_required(VERSION 3.5)
-
-project(EvalMaxSAT)
-get_filename_component(projectName EvalMaxSAT_bin NAME)
-
+cmake_minimum_required(VERSION 3.12)
+set(projectName EvalMaxSAT_bin)
 message("cmake for ${projectName}")
+project(${projectName})
 
-file(
-        GLOB
-	source_files
-	main.cpp
-        config.h
-)
-
+# List of local libraries
 set(localLibs
 	MaLib
-        EvalMaxSAT
-        cadical
+    cadical
+    EvalMaxSAT
 )
 
+# List of external libraries
 set(externLibs
-        z
-        pthread
+    z
 )
 
 
-add_definitions(-DNDEBUG)
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3")
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O0 -g")
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O3 -g")
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z -Wall -O2 -static -lrt -pthread -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
+set(CMAKE_CXX_STANDARD 20)
 
-
-if(TARGET ${projectName})
-	message("${projectName} is already defined")
-else()
-	FOREACH (localLib ${localLibs})
-		add_subdirectory (lib/${localLib} ${localLib})
-	ENDFOREACH(localLib)
-
-	add_executable (
-		${projectName}
-		${source_files}
-	)
-
-	FOREACH (localLib ${localLibs})
-		include_directories (lib/${localLib}/src)
-	ENDFOREACH(localLib)
-
-	set(LIB_LINK
-		${localLibs}
-		${externLibs}
-	)
-
-	target_link_libraries(${projectName}
-	    ${LIB_LINK}
-	)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-install (TARGETS ${projectName} DESTINATION bin)
+# Add local libraries
+FOREACH(localLib ${localLibs})
+    if(NOT TARGET ${localLib})
+        add_subdirectory(lib/${localLib})
+    endif()
+ENDFOREACH(localLib)
 
+find_package(ZLIB)
+include_directories(${ZLIB_INCLUDE_DIR})
+
+add_executable(${projectName} main.cpp)
+
+FOREACH(localLib ${localLibs})
+    target_include_directories(${projectName} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lib/${localLib})
+ENDFOREACH(localLib)
+
+target_link_libraries(${projectName} 
+    ${localLibs}
+    ${externLibs}
+)
+
+#install (TARGETS ${projectName} DESTINATION bin)
+
+install(TARGETS ${projectName}
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
