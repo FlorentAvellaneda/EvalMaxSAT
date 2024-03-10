@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cassert>
 #include <tuple>
+#include <zlib.h>
 
 #include "ParseUtils.h"
 

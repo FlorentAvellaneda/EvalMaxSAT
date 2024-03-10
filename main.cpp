@@ -1,7 +1,6 @@
 #include <iostream>
 #include <cassert>
 #include <csignal>
-#include <zlib.h>
 #include <chrono>
 
 #include <unistd.h>

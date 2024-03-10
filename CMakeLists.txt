@@ -44,8 +44,6 @@ target_link_libraries(${projectName}
     ${externLibs}
 )
 
-#install (TARGETS ${projectName} DESTINATION bin)
-
 install(TARGETS ${projectName}
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
