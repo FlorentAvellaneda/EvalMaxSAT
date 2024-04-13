@@ -107,6 +107,7 @@ class EvalMaxSAT {
         WeightVector _poids; // _poids[lit] = weight of lit
         std::map<t_weight, std::set<int>> _mapWeight2Assum; // _mapWeight2Assum[weight] = set of literals with this weight
         t_weight cost = 0;
+        ////// TODO : ajouter Offset_Cost avec poids négatif !!   cost (et solutionCost?)  corespondront alors au poids sur la formule actuelle, les modification de la formule apportant des modification de poids affecterons seulement Offset_Cost  (clause de poids négatif, AM1, autre ?)
 
         struct LitCard {
             std::shared_ptr<CardIncremental_Lazy<EvalMaxSAT<SAT_SOLVER>> > card;
@@ -130,7 +131,6 @@ class EvalMaxSAT {
     ///
     //////////////////////////
 
-public:
     ///////////////////////////
     /// Best solution found so far
     ///
@@ -243,6 +243,7 @@ public:
 
     int newSoftVar(bool value, long long weight) {
         if(weight < 0) {
+            ///// TODO: ajouer Offset_Cost -= weight
             value = !value;
             weight = -weight;
         }
@@ -303,9 +304,6 @@ public:
         return 0;
     }
 
-    t_weight getCost() {
-        return solutionCost;
-    }
 
     bool getValue(int lit) {
         if(abs(lit) > solution.size())
@@ -1222,14 +1220,29 @@ private:
         return 1;
     }
 
-public:
-    unsigned int nInputVars=0;
-    void setNInputVars(unsigned int nInputVars) {
-        this->nInputVars=nInputVars;
-    }
-    unsigned int nVars() {
-        return solver->nVars();
-    }
+    ///////////////////////////
+    /// Getter
+    ///
+        unsigned int nInputVars=0;
+        public:
+        void setNInputVars(unsigned int nInputVars) { // Only used to format the size of the solution
+            this->nInputVars=nInputVars;
+        }
+        unsigned int nVars() {
+            return _poids.size()-1;
+            //return solver->nVars();
+        }
+        std::vector<bool> getSolution() {
+            return std::vector<bool>(solution.begin(), solution.begin() + nInputVars + 1);
+            std::vector<bool> res = solution;
+            res.resize(nInputVars+1);
+            return res;
+        }
+        t_weight getCost() {
+            return solutionCost;
+        }
+    //
+    /////////////////
 };
 
 

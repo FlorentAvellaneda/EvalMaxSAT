@@ -38,18 +38,19 @@ void signalHandler( int signum ) {
     std::cout << "c Interrupt signal (" << signum << ") received."<< std::endl;
 
     if(monMaxSat != nullptr) {
+        auto solution = monMaxSat->getSolution();
         if(bench) {
-                std::cout << cur_file << "\t" << calculateCost(cur_file, monMaxSat->solution) << "\t" << TotalChrono.tacSec() << std::endl;
+                std::cout << cur_file << "\t" << calculateCost(cur_file, solution) << "\t" << TotalChrono.tacSec() << std::endl;
         } else {
-            t_weight cost = calculateCost(cur_file, monMaxSat->solution);
+            t_weight cost = calculateCost(cur_file, solution);
 
             if(cost != -1) {
                 if(oldOutputFormat) {
-                    std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+                    std::cout << "o " << calculateCost(cur_file, solution) << std::endl;
                     std::cout << "s SATISFIABLE" << std::endl;
                     std::cout << "v";
-                    for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
-                        if(monMaxSat->solution[i]) {
+                    for(unsigned int i=1; i<solution.size(); i++) {
+                        if(solution[i]) {
                             std::cout << " " << i;
                         } else {
                             std::cout << " -" << i;
@@ -57,12 +58,12 @@ void signalHandler( int signum ) {
                     }
                     std::cout << std::endl;
                 } else {
-                    std::cout << "o " << calculateCost(cur_file, monMaxSat->solution) << std::endl;
+                    std::cout << "o " << calculateCost(cur_file, solution) << std::endl;
                     std::cout << "s SATISFIABLE" << std::endl;
                     //std::cout << "o " << calculateCost(file, solution) << std::endl;
                     std::cout << "v ";
-                    for(unsigned int i=1; i<monMaxSat->solution.size(); i++) {
-                        std::cout << monMaxSat->solution[i];
+                    for(unsigned int i=1; i<solution.size(); i++) {
+                        std::cout << solution[i];
                     }
                     std::cout << std::endl;
                 }
@@ -97,10 +98,11 @@ std::tuple<bool, std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::
         //std::cout << "s UNSATISFIABLE" << std::endl;
         return std::make_tuple<bool, std::vector<bool>, t_weight>(false, {},-1);
     }
+    auto solution = monMaxSat->getSolution();
+    std::cout << "c nombre de var = " << solution.size() << std::endl;
+    assert(monMaxSat->solutionCost == calculateCost(file, solution));
 
-    assert(monMaxSat->solutionCost == calculateCost(file, monMaxSat->solution));
-
-    return {true, monMaxSat->solution, calculateCost(file, monMaxSat->solution)};
+    return {true, solution, calculateCost(file, solution)};
 }
 
 
