@@ -100,7 +100,7 @@ std::tuple<bool, std::vector<bool>, t_weight> solveFile(SOLVER *monMaxSat, std::
     }
     auto solution = monMaxSat->getSolution();
     std::cout << "c nombre de var = " << solution.size() << std::endl;
-    assert(monMaxSat->solutionCost == calculateCost(file, solution));
+    assert(monMaxSat->getCost() == calculateCost(file, solution));
 
     return {true, solution, calculateCost(file, solution)};
 }
