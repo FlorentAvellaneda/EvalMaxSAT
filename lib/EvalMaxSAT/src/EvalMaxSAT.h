@@ -278,6 +278,12 @@ public:
         } else {
             if(w.value() == 0)
                 return 0;
+            if(solutionCost != std::numeric_limits<t_weight>::max()) {
+                if(!is_incremental) {
+                    std::cerr << "c Error: You cannot add a soft clause after the first solve if the incremental mode is not activated." << std::endl;
+                    exit(-1);
+                }
+            }
             if(clause.size() > 1) { // Soft clause, i.e, "hard" clause with a soft var at the end
                 if( w.value() > 0 ) {
                     auto softVar = newSoftVar(true, w.value());
@@ -337,9 +343,14 @@ public:
     void disableOptimize() {
         toOptimize = false;
     }
+    void setIncremental(bool value=true) {
+        is_incremental = value;
+    }
 
     bool solve() {
-        // TODO: Support incremental solve
+        if(solutionCost != std::numeric_limits<t_weight>::max()) {
+            solutionCost = std::numeric_limits<t_weight>::max();
+        }
 
         totalSolveTimeout.restart();
 
@@ -381,6 +392,7 @@ public:
         ///
             assert(_cardToAdd.size() == 0);
             assert(_litToRelax.size() == 0);
+            /*
             assert( [&](){
                 for(auto e: _mapAssum2Card) {
                     if(e.has_value())
@@ -388,6 +400,7 @@ public:
                 }
                 return true;
             }() );
+            */
 
             LocalOptimizer2 LO(solver, _poids, cost);
         //
@@ -665,8 +678,10 @@ public:
 
 
     private:
-
+    bool is_incremental = false;
     int harden(std::set<int> &assum) {
+        if(is_incremental)
+            return 0;
         if(_mapWeight2Assum.size() == 0)
             return 0;
         if(_mapWeight2Assum.size()==1) {
@@ -1114,14 +1129,14 @@ public:
                 assert( _mapWeight2Assum[_poids[lit]].count( lit ) );
                 _mapWeight2Assum[_poids[lit]].erase( lit );
                 _poids.add(lit, weight);
-                assert( _poids[lit] < 0 ? !_mapAssum2Card[lit].has_value() : true ); // If -lit becomes a soft var, it should not be a cardinality
+                assert( _poids[lit] < 0 ? !_mapAssum2Card[abs(lit)].has_value() : true ); // If -lit becomes a soft var, it should not be a cardinality
             } else { // if( _poids[lit] < 0 )
                 assert( _mapWeight2Assum[_poids[-lit]].count( -lit ) );
                 _mapWeight2Assum[_poids[-lit]].erase( -lit );
 
                 cost += std::min(weight, _poids[-lit]);
                 _poids.add(lit, weight);
-                assert( _poids[-lit] > 0 ? !_mapAssum2Card[-lit].has_value() : true ); // If lit becomes a soft var, it should not be a cardinality
+                assert( _poids[-lit] > 0 ? !_mapAssum2Card[abs(lit)].has_value() : true ); // If lit becomes a soft var, it should not be a cardinality
             }
 
             if(_poids[lit] != 0) {
@@ -1233,7 +1248,9 @@ private:
             //return solver->nVars();
         }
         std::vector<bool> getSolution() {
-            return std::vector<bool>(solution.begin(), solution.begin() + nInputVars + 1);
+            if(solution.size() >= nInputVars+1) {
+                return std::vector<bool>(solution.begin(), solution.begin() + nInputVars + 1);
+            }
             std::vector<bool> res = solution;
             res.resize(nInputVars+1);
             return res;
