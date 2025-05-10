@@ -12,6 +12,7 @@
 #include "Chrono.h"
 #include "coutUtil.h"
 #include "cadicalinterface.h"
+#include "glucoseinterface.h"
 #include "cardincremental.h"
 #include "rand.h"
 #include "mcqd.h"
@@ -20,14 +21,14 @@
 using namespace MaLib;
 
 
-
+template<class SAT_SOLVER=Solver_cadical>
 class LocalOptimizer2 {
-    Solver_cadical *solver;
+    SAT_SOLVER *solver;
     WeightVector poids;
     t_weight initialWeight;
 
 public:
-    LocalOptimizer2(Solver_cadical *solver, const WeightVector &poids, const t_weight &initialWeight) :
+    LocalOptimizer2(SAT_SOLVER *solver, const WeightVector &poids, const t_weight &initialWeight) :
         solver(solver), poids(poids), initialWeight(initialWeight) {
 
     }
@@ -401,7 +402,7 @@ public:
             }() );
             */
 
-            LocalOptimizer2 LO(solver, _poids, cost);
+            LocalOptimizer2<SAT_SOLVER> LO(solver, _poids, cost);
         //
         /////////////////
 

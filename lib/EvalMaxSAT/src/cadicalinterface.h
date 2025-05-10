@@ -1,8 +1,8 @@
 #pragma once
 
 
-#include "../../cadical/src/cadical.hpp"
-#include "../../cadical/src/internal.hpp"
+#include "cadical.hpp"
+#include "internal.hpp"
 
 #include <cmath>
 #include <cassert>

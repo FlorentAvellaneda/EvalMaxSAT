@@ -12,7 +12,8 @@ set(public_libs
 
 set(private_libs
     MaLib
-    cadical
+    glucose
+	cadical
 )
 
 file(
