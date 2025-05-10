@@ -1,4 +1,4 @@
-#ifndef CHRONO_R7U52KTM
+#pragma once
 
 #define CHRONO_R7U52KTM
 
@@ -140,10 +140,5 @@ namespace MaLib
     };
 
 }
-
-
-#endif /* end of include guard: CHRONO_R7U52KTM */
-
-
 
 

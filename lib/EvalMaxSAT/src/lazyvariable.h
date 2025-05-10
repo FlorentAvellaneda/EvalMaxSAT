@@ -1,5 +1,4 @@
-#ifndef IMPLICATIONGRAPH_H
-#define IMPLICATIONGRAPH_H
+#pragma once
 
 #include <optional>
 #include <vector>
@@ -84,4 +83,3 @@ public:
 
 
 
-#endif // IMPLICATIONGRAPH_H

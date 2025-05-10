@@ -1,5 +1,4 @@
-#ifndef EVALMAXSAT_SLK178903R_H
-#define EVALMAXSAT_SLK178903R_H
+#pragma once
 
 
 #include <iostream>
@@ -1264,7 +1263,4 @@ private:
 
 
 
-
-
-#endif // EVALMAXSAT_SLK178903R_H
 

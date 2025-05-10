@@ -1,7 +1,4 @@
-
-
-#ifndef __MALIB__COUTUTIL____
-#define __MALIB__COUTUTIL____ 
+#pragma once
 
 
 #include <iostream>
@@ -185,4 +182,3 @@ void MonPrint(const T&... args) {
 }
 
 
-#endif

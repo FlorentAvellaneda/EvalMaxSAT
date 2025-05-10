@@ -1,5 +1,5 @@
-#ifndef CARDINCREMENTAL_H
-#define CARDINCREMENTAL_H
+#pragma once
+
 
 #include <optional>
 #include <cassert>
@@ -245,4 +245,3 @@ private:
 
 
 
-#endif // CARDINCREMENTAL_H

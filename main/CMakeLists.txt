@@ -1,18 +1,21 @@
 cmake_minimum_required(VERSION 3.12)
 
-get_filename_component(projectName ${CMAKE_CURRENT_SOURCE_DIR} NAME)
+set(projectName EvalMaxSAT_bin)
+
 message("cmake for ${projectName}")
 project(${projectName})
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 set(public_libs
 
 )
 
 set(private_libs
-    MaLib
-    cadical
+	MaLib
+	cadical
+	EvalMaxSAT
+	z
 )
 
 file(
@@ -21,13 +24,12 @@ file(
 	src/*
 )
 
-add_library (
+add_executable (
     ${projectName}
     ${source_files}
 )
 
-target_include_directories(${projectName} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(${projectName} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(${projectName} PUBLIC ${public_libs} PRIVATE ${private_libs})
-
 

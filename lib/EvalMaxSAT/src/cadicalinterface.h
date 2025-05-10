@@ -1,5 +1,4 @@
-#ifndef CADICALINTERFACE_H
-#define CADICALINTERFACE_H
+#pragma once
 
 
 #include "../../cadical/src/cadical.hpp"
@@ -243,4 +242,3 @@ public:
 
 
 
-#endif

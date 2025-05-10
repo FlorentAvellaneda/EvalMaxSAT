@@ -1,7 +1,4 @@
-
-
-#ifndef MALIB__RAND__H
-#define MALIB__RAND__H 
+#pragma once
 
 #include <random>
 #include <cassert>
@@ -9,12 +6,12 @@
 #include <algorithm>
 
 namespace MaLib {
-
     class MonRand {
         static std::mt19937& getGen() {
             static std::mt19937 gen = std::mt19937();
             return gen;
         }
+        
     public:
         template< class Sseq >
         static void seed(Sseq& seq) {
@@ -27,7 +24,6 @@ namespace MaLib {
             if( v > MonRand::getGen().max() / 2 ) {
                 v--;
             }
-
             return v < MonRand::getGen().max() * proba;
         }
 
@@ -38,17 +34,17 @@ namespace MaLib {
         static unsigned int get(unsigned int min, unsigned int max) {
             return min+MonRand::getGen().operator()()%(max - min + 1);
         }
+        
         template <class T>
         static void shuffle(T &v) {
             std::shuffle(v.begin(), v.end(), getGen());
         }
+        
         template <class RandomIt>
         static void shuffle(RandomIt first, RandomIt second) {
             std::shuffle(first, second, getGen());
         }
     };
-
 }
 
 
-#endif
