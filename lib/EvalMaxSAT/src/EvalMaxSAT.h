@@ -128,6 +128,17 @@ class EvalMaxSAT {
 
         std::deque< std::tuple< std::vector<int>, t_weight> > _cardToAdd;   // cardinality to add
         std::vector<int> _litToRelax; // Lit to relax
+        
+        bool start_solve = false;
+        struct ManageStartVariable {
+            bool &start_solve;
+            ManageStartVariable(bool &start_solve) : start_solve(start_solve) {
+              start_solve = true;
+            }
+            ~ManageStartVariable() {
+              start_solve = false;
+            }
+        };
     ///
     //////////////////////////
 
@@ -278,10 +289,12 @@ public:
         } else {
             if(w.value() == 0)
                 return 0;
-            if(solutionCost != std::numeric_limits<t_weight>::max()) {
-                if(!is_incremental) {
-                    std::cerr << "c Error: You cannot add a soft clause after the first solve if the incremental mode is not activated." << std::endl;
-                    exit(-1);
+            if(!start_solve) {
+                if(solutionCost != std::numeric_limits<t_weight>::max()) {
+                    if(!is_incremental) {
+                        std::cerr << "c Error: You cannot add a soft clause after the first solve if the incremental mode is not activated." << std::endl;
+                        exit(-1);
+                    }
                 }
             }
             if(clause.size() > 1) { // Soft clause, i.e, "hard" clause with a soft var at the end
@@ -348,6 +361,9 @@ public:
     }
 
     bool solve() {
+        
+        ManageStartVariable manage(start_solve);
+    
         if(solutionCost != std::numeric_limits<t_weight>::max()) {
             solutionCost = std::numeric_limits<t_weight>::max();
         }
