@@ -267,7 +267,7 @@ public:
     }
 
     std::vector<bool> getSolution() {
-        std::vector<bool> res;
+        std::vector<bool> res = {false};
 
         for(unsigned int i=1; i<solver->model.size(); i++) {
             if(solver->model[i] == l_True) {
